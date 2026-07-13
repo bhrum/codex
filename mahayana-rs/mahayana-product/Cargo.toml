@@ -1,0 +1,11 @@
+[package]
+name = "mahayana-product"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+serde_json.workspace = true
+ureq.workspace = true
+url.workspace = true

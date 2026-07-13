@@ -1,0 +1,20 @@
+[package]
+name = "fabushi-telegram-network"
+version = "0.1.0"
+edition = "2021"
+description = "Native TCP transport and MTProto auth-key bootstrap for Fabushi Telegram."
+publish = false
+
+[lib]
+name = "fabushi_telegram_network"
+path = "src/lib.rs"
+
+[[bin]]
+name = "telegram-auth-key-probe"
+path = "src/bin/telegram-auth-key-probe.rs"
+
+[dependencies]
+fabushi-telegram-protocol = { path = "../telegram-protocol" }
+getrandom = "0.2"
+thiserror = "1"
+zeroize = "1"

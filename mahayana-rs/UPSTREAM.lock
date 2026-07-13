@@ -1,0 +1,4 @@
+repository=https://github.com/openai/codex.git
+branch=main
+commit=2f7d89b1419bf7064346855b0acde23514b1ebc5
+reviewed_at=2026-07-13

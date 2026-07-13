@@ -1,0 +1,46 @@
+[package]
+name = "mahayana-ffi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Stable C/JSON ABI for the embedded Mahayana Runtime."
+publish = false
+
+[lib]
+name = "mahayana_runtime"
+path = "src/lib.rs"
+crate-type = ["rlib", "cdylib", "staticlib"]
+doctest = false
+
+[features]
+default = ["desktop-full", "local-only"]
+desktop-full = [
+    "mahayana-runtime-core/desktop-full",
+    "dep:codex-protocol",
+    "dep:mahayana-agent-codex",
+]
+mobile-embedded = [
+    "mahayana-runtime-core/mobile-embedded",
+    "dep:mahayana-agent-responses",
+]
+web-wasm = ["mahayana-runtime-core/web-wasm"]
+local-only = ["mahayana-runtime-core/local-only"]
+remote-model-provider = ["mahayana-runtime-core/remote-model-provider"]
+telemetry = ["mahayana-runtime-core/telemetry"]
+
+[dependencies]
+codex-protocol = { workspace = true, optional = true }
+fabushi-miniapp-runtime = { path = "../providers/fabushi-miniapp-runtime" }
+fabushi-telegram-runtime = { path = "../providers/telegram-runtime" }
+mahayana-agent.workspace = true
+mahayana-agent-codex = { path = "../mahayana-agent-codex", optional = true }
+mahayana-agent-responses = { workspace = true, optional = true }
+mahayana-core.workspace = true
+mahayana-miniapp.workspace = true
+mahayana-product = { path = "../mahayana-product" }
+mahayana-runtime-core = { package = "mahayana-runtime", path = "../mahayana-runtime", default-features = false }
+mahayana-social.workspace = true
+mahayana-telegram.workspace = true
+once_cell.workspace = true
+serde.workspace = true
+serde_json.workspace = true

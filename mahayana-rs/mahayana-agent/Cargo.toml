@@ -1,0 +1,13 @@
+[package]
+name = "mahayana-agent"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Platform-neutral Agent backend contract for Mahayana."
+publish = false
+
+[dependencies]
+async-trait.workspace = true
+mahayana-core.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

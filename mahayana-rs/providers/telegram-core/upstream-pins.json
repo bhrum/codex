@@ -1,0 +1,31 @@
+{
+  "capturedAt": "2026-07-10",
+  "repositories": [
+    {"name":"TDLib","url":"https://github.com/tdlib/td","commit":"a17f87c4cff7b90b278d12b91ba0614383aaee82","license":"BSL-1.0"},
+    {"name":"Telegram Android","url":"https://github.com/DrKLO/Telegram","commit":"9b50143d8896d255d03155598937e4f3e28afd86","license":"GPL-2.0-or-later"},
+    {"name":"Telegram iOS","url":"https://github.com/TelegramMessenger/Telegram-iOS","commit":"6e370e06d147b091b07903071cb1b8a22152492d","license":"GPL-2.0-or-later"},
+    {"name":"Telegram macOS","url":"https://github.com/overtake/TelegramSwift","commit":"579cebbf0c01fd41b712eff3647fa7f69db9665d","license":"GPL-2.0"},
+    {"name":"Telegram Web K","url":"https://github.com/morethanwords/tweb","commit":"e22ba93520baf7b24eb15ed6806b6b4736c00e02","license":"GPL-3.0"},
+    {"name":"Telegram Web A","url":"https://github.com/Ajaxy/telegram-tt","commit":"eb9f74669d8f855c5e8c6cd4879a0a629a745811","license":"GPL-3.0"},
+    {"name":"Telegram Desktop","url":"https://github.com/telegramdesktop/tdesktop","commit":"e01ee7256693cc4bdfa4dca0eb4f969c3f3b9227","license":"GPL-3.0-with-OpenSSL-exception"},
+    {"name":"Telegram X Android","url":"https://github.com/TGX-Android/Telegram-X","commit":"c5b0465ef61c96b2f80b60b1d34f2e0ad748fd4d","license":"GPL-3.0"}
+  ],
+  "tdlibSchema": {
+    "path": "td/generate/scheme/td_api.tl",
+    "sha256": "a8166ef37efb1a1440357b81e8e26c68ea45a35901c0bcc8d69964487c98476f",
+    "types": 2126,
+    "functions": 1001
+  },
+  "telegramApiSchema": {
+    "path": "td/generate/scheme/telegram_api.tl",
+    "sha256": "eb841074c076c62effa1ef01523da9d9d8157430b7276e849a8e0ce7f4f71bf9",
+    "types": 1631,
+    "functions": 796
+  },
+  "mtprotoApiSchema": {
+    "path": "td/generate/scheme/mtproto_api.tl",
+    "sha256": "bde4942be06dc112dfc655e2a8aa5163a4e3aa0d859d7840cfc76ec3a00654c4",
+    "types": 40,
+    "functions": 8
+  }
+}

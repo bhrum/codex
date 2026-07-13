@@ -1,0 +1,15 @@
+[package]
+name = "mahayana-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "mahayana"
+path = "src/main.rs"
+
+[dependencies]
+mahayana-ffi = { path = "../mahayana-ffi" }
+mahayana-product = { path = "../mahayana-product" }
+serde_json.workspace = true

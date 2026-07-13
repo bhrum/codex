@@ -1,0 +1,21 @@
+[package]
+name = "mahayana-web"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Browser-native Mahayana Runtime compiled to WebAssembly."
+publish = false
+
+[lib]
+name = "mahayana_web"
+path = "src/lib.rs"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+js-sys = "=0.3.103"
+mahayana-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+wasm-bindgen.workspace = true
+wasm-bindgen-futures.workspace = true
+web-sys.workspace = true

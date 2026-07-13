@@ -1,0 +1,28 @@
+[package]
+name = "fabushi-telegram-storage"
+version = "0.1.0"
+edition = "2021"
+description = "Encrypted SQLite snapshots and event log for the Fabushi Telegram Rust core."
+publish = false
+
+[lib]
+name = "fabushi_telegram_storage"
+path = "src/lib.rs"
+crate-type = ["rlib", "cdylib", "staticlib"]
+
+[dependencies]
+chacha20poly1305 = "0.10"
+fabushi-telegram-core = { path = "../telegram-core" }
+hmac = "0.12"
+rand_core = { version = "0.6", features = ["getrandom"] }
+# Keep the SQLite FFI version aligned with Codex's state store so Telegram and
+# Codex can coexist in one embedded process without duplicate `sqlite3` links.
+rusqlite = { version = "0.39", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "1"
+zeroize = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+tempfile = "3"
