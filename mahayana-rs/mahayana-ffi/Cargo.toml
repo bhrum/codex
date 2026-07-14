@@ -24,7 +24,8 @@ desktop-full = [
 ]
 mobile-embedded = [
     "mahayana-runtime-core/mobile-embedded",
-    "dep:mahayana-agent-responses",
+    "dep:codex-protocol",
+    "dep:mahayana-agent-codex",
 ]
 web-wasm = ["mahayana-runtime-core/web-wasm"]
 local-only = ["mahayana-runtime-core/local-only"]
@@ -37,7 +38,6 @@ fabushi-miniapp-runtime = { path = "../providers/fabushi-miniapp-runtime" }
 fabushi-telegram-runtime = { path = "../providers/telegram-runtime" }
 mahayana-agent.workspace = true
 mahayana-agent-codex = { path = "../mahayana-agent-codex", optional = true }
-mahayana-agent-responses = { workspace = true, optional = true }
 mahayana-conversation.workspace = true
 mahayana-core.workspace = true
 mahayana-miniapp.workspace = true

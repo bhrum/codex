@@ -85,6 +85,16 @@ incremental = false
 debug = 0
 incremental = false
 
+# Native applications ship the Runtime as one embedded library. Keep that
+# library small enough for mobile stores while preserving the audited crate
+# graph and the same JSON ABI used by desktop and Web.
+[profile.release]
+codegen-units = 1
+lto = "thin"
+opt-level = "z"
+panic = "abort"
+strip = "symbols"
+
 # Keep embedded Codex dependencies on the same audited revisions as the
 # upstream codex-rs workspace. Cargo patches are scoped to a workspace, so the
 # Mahayana embedding workspace must repeat them here.

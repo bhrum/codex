@@ -1,15 +1,11 @@
 //! C/JSON ABI for native Mahayana hosts.
 
 use mahayana_agent::UnavailableAgentBackend;
-#[cfg(feature = "desktop-full")]
+#[cfg(any(feature = "desktop-full", feature = "mobile-embedded"))]
 use mahayana_agent_codex::CodexAgentBackend;
-#[cfg(feature = "desktop-full")]
+#[cfg(any(feature = "desktop-full", feature = "mobile-embedded"))]
 use mahayana_agent_codex::CodexAgentConfig;
-#[cfg(feature = "mobile-embedded")]
-use mahayana_agent_responses::ResponsesAgentBackend;
-#[cfg(feature = "mobile-embedded")]
-use mahayana_agent_responses::ResponsesAgentConfig;
-#[cfg(feature = "desktop-full")]
+#[cfg(any(feature = "desktop-full", feature = "mobile-embedded"))]
 use mahayana_conversation::ConversationProvider;
 use mahayana_core::ApprovalDecision;
 use mahayana_core::ApprovalId;
@@ -20,6 +16,7 @@ use mahayana_core::RuntimeConfig;
 use mahayana_miniapp::MiniAppConversationProvider;
 use mahayana_miniapp::MiniAppDefinition;
 use mahayana_product::MahayanaProductClient;
+#[cfg(feature = "desktop-full")]
 use mahayana_product::default_mahayana_home;
 use mahayana_runtime_core::MahayanaRuntime;
 use mahayana_runtime_core::RuntimeBuilder;
@@ -59,8 +56,8 @@ struct RuntimeCreateConfig {
     product_session_token: Option<String>,
     product_session_path: Option<PathBuf>,
     codex_home: Option<PathBuf>,
-    /// Optional Mahayana CLI executable that supports Codex argv helper
-    /// dispatch. SDK hosts omit it and run the Agent without local exec tools.
+    /// Optional Mahayana CLI executable that supports desktop argv helper
+    /// dispatch. SDK hosts omit it and use in-process Mahayana workspace tools.
     codex_executable_path: Option<PathBuf>,
     cwd: Option<PathBuf>,
     /// Existing embedded Telegram client created by the platform login flow.
@@ -126,14 +123,14 @@ fn build_runtime(create: RuntimeCreateConfig) -> Result<MahayanaRuntime, String>
         .filter(|value| !value.trim().is_empty())
         .or_else(|| product_client.session_token().ok());
     let mut builder = RuntimeBuilder::new(runtime_config.clone());
-    #[cfg(feature = "desktop-full")]
+    #[cfg(any(feature = "desktop-full", feature = "mobile-embedded"))]
     let mut codex_conversation_providers: Vec<Arc<dyn ConversationProvider>> = Vec::new();
     if let Some(token) = session_token.as_ref() {
         let provider = Arc::new(MahayanaSocialConversationProvider::new(
             product_client,
             Some(token.clone()),
         ));
-        #[cfg(feature = "desktop-full")]
+        #[cfg(any(feature = "desktop-full", feature = "mobile-embedded"))]
         codex_conversation_providers.push(Arc::clone(&provider) as Arc<dyn ConversationProvider>);
         builder = builder
             .with_provider(provider)
@@ -144,17 +141,23 @@ fn build_runtime(create: RuntimeCreateConfig) -> Result<MahayanaRuntime, String>
             telegram_client_id,
             create.telegram_self_user_id.unwrap_or_default(),
         ));
-        #[cfg(feature = "desktop-full")]
+        #[cfg(any(feature = "desktop-full", feature = "mobile-embedded"))]
         codex_conversation_providers.push(Arc::clone(&provider) as Arc<dyn ConversationProvider>);
         builder = builder
             .with_provider(provider)
             .map_err(|error| error.to_string())?;
     }
 
-    #[cfg(feature = "desktop-full")]
-    if runtime_config.build_profile == BuildProfile::DesktopFull {
+    #[cfg(any(feature = "desktop-full", feature = "mobile-embedded"))]
+    if matches!(
+        runtime_config.build_profile,
+        BuildProfile::DesktopFull | BuildProfile::MobileEmbedded
+    ) {
+        let data_dir = runtime_config.data_dir.clone();
         let cwd = create
             .cwd
+            .or_else(|| runtime_config.workspace_roots.first().cloned())
+            .or_else(|| data_dir.as_ref().map(|path| path.join("workspace")))
             .or_else(|| std::env::current_dir().ok())
             .ok_or_else(|| "current working directory is unavailable".to_string())?;
         let workspace_roots = if runtime_config.workspace_roots.is_empty() {
@@ -164,14 +167,11 @@ fn build_runtime(create: RuntimeCreateConfig) -> Result<MahayanaRuntime, String>
         };
         let codex_home = create
             .codex_home
-            .or_else(|| {
-                create
-                    .runtime
-                    .data_dir
-                    .clone()
-                    .map(|path| path.join("codex"))
-            })
-            .unwrap_or_else(default_codex_home);
+            .or_else(|| data_dir.map(|path| path.join("codex")))
+            .or_else(default_codex_home_if_available)
+            .ok_or_else(|| {
+                "embedded Mahayana requires an application data directory".to_string()
+            })?;
         let responses_base_url = create
             .runtime
             .model
@@ -194,31 +194,6 @@ fn build_runtime(create: RuntimeCreateConfig) -> Result<MahayanaRuntime, String>
             .build_with_agent_backend_and(
                 || async move {
                     let backend = CodexAgentBackend::start(settings).await?;
-                    Ok(Arc::new(backend) as Arc<dyn mahayana_agent::AgentBackend>)
-                },
-                move |builder, backend| {
-                    let provider = MiniAppConversationProvider::new(backend, mini_apps)?;
-                    builder.with_provider(Arc::new(provider))
-                },
-            )
-            .map_err(|error| error.to_string());
-    }
-
-    #[cfg(feature = "mobile-embedded")]
-    if runtime_config.build_profile == BuildProfile::MobileEmbedded {
-        let settings = ResponsesAgentConfig {
-            model: runtime_config.model.model.clone(),
-            responses_base_url: runtime_config
-                .model
-                .base_url
-                .clone()
-                .ok_or_else(|| "Dacheng Responses base URL is required".to_string())?,
-            product_session_token: session_token.clone(),
-        };
-        return builder
-            .build_with_agent_backend_and(
-                || async move {
-                    let backend = ResponsesAgentBackend::new(settings)?;
                     Ok(Arc::new(backend) as Arc<dyn mahayana_agent::AgentBackend>)
                 },
                 move |builder, backend| {
@@ -263,7 +238,7 @@ fn default_mini_apps() -> Vec<MiniAppDefinition> {
         (
             "official.bot-father",
             "机器人之父",
-            "根据用户描述开发、修改和调试大乘个人沙箱小程序。若当前环境支持并明确要求文件工具，就直接修改工作区；否则只回复一份完整、自包含、少于 1800 个字符的单文件 HTML。HTML 必须从 <!DOCTYPE html> 开始并以 </html> 结束，CSS 和 JavaScript 内联，不使用 Markdown 围栏，不附加解释。",
+            "根据用户描述开发、修改和调试大乘个人沙箱小程序。优先使用内置文件工具直接在当前工作区创建或更新 index.html；生成物必须是完整、自包含、少于 1800 个字符的单文件 HTML，HTML 从 <!DOCTYPE html> 开始并以 </html> 结束，CSS 和 JavaScript 内联。完成文件修改后简要说明结果。只有文件工具确实不可用时，才直接回复 HTML 源码且不使用 Markdown 围栏。",
         ),
         (
             "official.assistant",
@@ -284,6 +259,18 @@ fn default_mini_apps() -> Vec<MiniAppDefinition> {
 #[cfg(feature = "desktop-full")]
 fn default_codex_home() -> PathBuf {
     default_mahayana_home().join("codex")
+}
+
+#[cfg(any(feature = "desktop-full", feature = "mobile-embedded"))]
+fn default_codex_home_if_available() -> Option<PathBuf> {
+    #[cfg(feature = "desktop-full")]
+    {
+        return Some(default_codex_home());
+    }
+    #[cfg(not(feature = "desktop-full"))]
+    {
+        None
+    }
 }
 
 /// Executes one command against a runtime and returns an owned JSON string.

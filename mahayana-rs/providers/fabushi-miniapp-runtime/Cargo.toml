@@ -8,7 +8,7 @@ publish = false
 [lib]
 name = "fabushi_miniapp_runtime"
 path = "src/lib.rs"
-crate-type = ["cdylib", "staticlib", "rlib"]
+crate-type = ["rlib"]
 
 [dependencies]
 base64 = "0.22"

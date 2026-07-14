@@ -60,6 +60,8 @@ use mahayana_core::OperationId;
 use serde_json::Value;
 use serde_json::json;
 use std::collections::HashMap;
+use std::path::Component;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -86,9 +88,10 @@ pub struct CodexAgentConfig {
     pub product_session_token: Option<String>,
     pub sandbox_mode: SandboxMode,
     pub approval_policy: AskForApproval,
-    /// Mahayana CLI executable used for Codex's hidden filesystem/process
-    /// helper modes. Embedded SDK hosts omit this because their application
-    /// executable does not implement Codex argv dispatch.
+    /// Mahayana CLI executable used for Codex's hidden process helper modes.
+    /// Embedded SDK hosts omit it and use the in-process `mahayana` workspace
+    /// tools instead, because a mobile application executable cannot implement
+    /// desktop argv dispatch.
     pub codex_executable_path: Option<PathBuf>,
     /// Non-Agent providers owned by this same Mahayana Runtime. Codex receives
     /// bounded read-only tools for inspecting their conversations.
@@ -395,12 +398,167 @@ impl CodexAgentInner {
                     Err(error) => return dynamic_tool_error(&error.to_string()),
                 }
             }
-            _ => return dynamic_tool_error("不支持的大乘会话工具"),
+            "read_workspace_file" => {
+                let Some(path) = required_string_argument(&params.arguments, "path") else {
+                    return dynamic_tool_error("path 不能为空");
+                };
+                match self.read_workspace_file(path).await {
+                    Ok((relative_path, contents)) => Ok(json!({
+                        "path": relative_path,
+                        "contents": contents,
+                    })),
+                    Err(error) => return dynamic_tool_error(&error),
+                }
+            }
+            "write_workspace_file" => {
+                let Some(path) = required_string_argument(&params.arguments, "path") else {
+                    return dynamic_tool_error("path 不能为空");
+                };
+                let Some(contents) = params.arguments.get("contents").and_then(Value::as_str)
+                else {
+                    return dynamic_tool_error("contents 必须是字符串");
+                };
+                match self.write_workspace_file(path, contents).await {
+                    Ok((relative_path, bytes)) => Ok(json!({
+                        "path": relative_path,
+                        "bytesWritten": bytes,
+                    })),
+                    Err(error) => return dynamic_tool_error(&error),
+                }
+            }
+            "list_workspace_files" => match self.list_workspace_files().await {
+                Ok(files) => Ok(json!({"files": files})),
+                Err(error) => return dynamic_tool_error(&error),
+            },
+            _ => return dynamic_tool_error("不支持的大乘工具"),
         };
         match result {
             Ok(value) => dynamic_tool_success(value),
             Err(error) => dynamic_tool_error(&error.to_string()),
         }
+    }
+
+    fn workspace_root(&self) -> Result<PathBuf, String> {
+        let root = self
+            .config
+            .workspace_roots
+            .first()
+            .map(|root| root.to_path_buf())
+            .unwrap_or_else(|| self.config.cwd.to_path_buf());
+        std::fs::canonicalize(&root)
+            .map_err(|error| format!("无法访问大乘工作区 {}：{error}", root.display()))
+    }
+
+    fn relative_workspace_path(&self, raw_path: &str) -> Result<PathBuf, String> {
+        let trimmed = raw_path.trim();
+        if trimmed.is_empty() {
+            return Err("工作区路径不能为空".into());
+        }
+        let path = Path::new(trimmed);
+        if path.is_absolute()
+            || path
+                .components()
+                .any(|component| !matches!(component, Component::Normal(_)))
+        {
+            return Err("工作区路径必须是安全的相对路径，不能包含 .、.. 或绝对路径".into());
+        }
+        Ok(path.to_path_buf())
+    }
+
+    fn checked_workspace_path(
+        &self,
+        raw_path: &str,
+        must_exist: bool,
+    ) -> Result<(PathBuf, PathBuf), String> {
+        let relative_path = self.relative_workspace_path(raw_path)?;
+        let root = self.workspace_root()?;
+        let candidate = root.join(&relative_path);
+        let checked_path = if must_exist || candidate.exists() {
+            std::fs::canonicalize(&candidate).map_err(|error| {
+                format!("无法访问工作区文件 {}：{error}", relative_path.display())
+            })?
+        } else {
+            let parent = candidate
+                .parent()
+                .ok_or_else(|| "工作区文件缺少父目录".to_string())?;
+            let checked_parent = std::fs::canonicalize(parent).map_err(|error| {
+                format!("工作区父目录不存在 {}：{error}", relative_path.display())
+            })?;
+            checked_parent.join(
+                candidate
+                    .file_name()
+                    .ok_or_else(|| "工作区文件名无效".to_string())?,
+            )
+        };
+        if !checked_path.starts_with(&root) {
+            return Err("工作区路径越过了应用沙箱边界".into());
+        }
+        Ok((relative_path, checked_path))
+    }
+
+    async fn read_workspace_file(&self, raw_path: &str) -> Result<(String, String), String> {
+        let (relative_path, path) = self.checked_workspace_path(raw_path, true)?;
+        let metadata = tokio::fs::metadata(&path)
+            .await
+            .map_err(|error| format!("无法读取文件元数据：{error}"))?;
+        if !metadata.is_file() {
+            return Err("目标不是普通文件".into());
+        }
+        if metadata.len() > 512 * 1024 {
+            return Err("单个工作区文本文件不能超过 512 KiB".into());
+        }
+        let contents = tokio::fs::read_to_string(path)
+            .await
+            .map_err(|error| format!("无法读取 UTF-8 文本文件：{error}"))?;
+        Ok((relative_path.to_string_lossy().into_owned(), contents))
+    }
+
+    async fn write_workspace_file(
+        &self,
+        raw_path: &str,
+        contents: &str,
+    ) -> Result<(String, usize), String> {
+        if contents.len() > 512 * 1024 {
+            return Err("单个工作区文本文件不能超过 512 KiB".into());
+        }
+        let (relative_path, path) = self.checked_workspace_path(raw_path, false)?;
+        tokio::fs::write(path, contents)
+            .await
+            .map_err(|error| format!("无法写入工作区文件：{error}"))?;
+        Ok((relative_path.to_string_lossy().into_owned(), contents.len()))
+    }
+
+    async fn list_workspace_files(&self) -> Result<Vec<Value>, String> {
+        let root = self.workspace_root()?;
+        let mut entries = tokio::fs::read_dir(root)
+            .await
+            .map_err(|error| format!("无法列出大乘工作区：{error}"))?;
+        let mut files = Vec::new();
+        while let Some(entry) = entries
+            .next_entry()
+            .await
+            .map_err(|error| format!("无法读取大乘工作区条目：{error}"))?
+        {
+            if files.len() >= 200 {
+                break;
+            }
+            let file_type = entry
+                .file_type()
+                .await
+                .map_err(|error| format!("无法读取工作区文件类型：{error}"))?;
+            files.push(json!({
+                "name": entry.file_name().to_string_lossy(),
+                "kind": if file_type.is_file() {
+                    "file"
+                } else if file_type.is_dir() {
+                    "directory"
+                } else {
+                    "other"
+                },
+            }));
+        }
+        files.sort_by(|left, right| left["name"].as_str().cmp(&right["name"].as_str()));
+        Ok(files)
     }
 
     fn update_delta(
@@ -842,7 +1000,7 @@ impl AgentBackend for CodexAgentBackend {
 fn mahayana_dynamic_tools() -> Vec<DynamicToolSpec> {
     vec![DynamicToolSpec::Namespace(DynamicToolNamespaceSpec {
         name: "mahayana".into(),
-        description: "读取当前大乘 Runtime 中的 Telegram 与法布施联系人会话。".into(),
+        description: "操作 App 内置大乘 Runtime 的本地工作区与联系人会话。".into(),
         tools: vec![
             DynamicToolNamespaceTool::Function(DynamicToolFunctionSpec {
                 name: "list_conversations".into(),
@@ -868,8 +1026,52 @@ fn mahayana_dynamic_tools() -> Vec<DynamicToolSpec> {
                 }),
                 defer_loading: false,
             }),
+            DynamicToolNamespaceTool::Function(DynamicToolFunctionSpec {
+                name: "read_workspace_file".into(),
+                description: "读取 App 私有大乘工作区内的 UTF-8 文本文件。".into(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "工作区内的相对路径"}
+                    },
+                    "required": ["path"],
+                    "additionalProperties": false
+                }),
+                defer_loading: false,
+            }),
+            DynamicToolNamespaceTool::Function(DynamicToolFunctionSpec {
+                name: "write_workspace_file".into(),
+                description: "创建或覆盖 App 私有大乘工作区内的 UTF-8 文本文件。".into(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "工作区内的相对路径"},
+                        "contents": {"type": "string", "description": "完整文件内容"}
+                    },
+                    "required": ["path", "contents"],
+                    "additionalProperties": false
+                }),
+                defer_loading: false,
+            }),
+            DynamicToolNamespaceTool::Function(DynamicToolFunctionSpec {
+                name: "list_workspace_files".into(),
+                description: "列出 App 私有大乘工作区根目录中的文件。".into(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false
+                }),
+                defer_loading: false,
+            }),
         ],
     })]
+}
+
+fn required_string_argument<'a>(arguments: &'a Value, name: &str) -> Option<&'a str> {
+    arguments
+        .get(name)
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
 }
 
 fn dynamic_tool_success(value: Value) -> DynamicToolCallResponse {
