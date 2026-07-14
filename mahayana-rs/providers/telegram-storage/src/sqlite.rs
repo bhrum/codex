@@ -1,12 +1,24 @@
-use crate::{EncryptedPayload, StorageCipher, StorageError, StorageKey};
-use fabushi_telegram_core::{
-    ChatId, Event, FormattedText, Message, MessageContent, MessageId, TelegramState,
-};
-use rusqlite::{
-    params, params_from_iter, types::Value, Connection, OptionalExtension, TransactionBehavior,
-};
-use serde::{Deserialize, Serialize};
-use std::{collections::BTreeSet, path::Path};
+use crate::EncryptedPayload;
+use crate::StorageCipher;
+use crate::StorageError;
+use crate::StorageKey;
+use fabushi_telegram_core::ChatId;
+use fabushi_telegram_core::Event;
+use fabushi_telegram_core::FormattedText;
+use fabushi_telegram_core::Message;
+use fabushi_telegram_core::MessageContent;
+use fabushi_telegram_core::MessageId;
+use fabushi_telegram_core::TelegramState;
+use rusqlite::params;
+use rusqlite::params_from_iter;
+use rusqlite::types::Value;
+use rusqlite::Connection;
+use rusqlite::OptionalExtension;
+use rusqlite::TransactionBehavior;
+use serde::Deserialize;
+use serde::Serialize;
+use std::collections::BTreeSet;
+use std::path::Path;
 
 const SCHEMA_VERSION: i64 = 2;
 const SNAPSHOT_ID: i64 = 1;

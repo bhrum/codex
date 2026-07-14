@@ -1,8 +1,10 @@
-use fabushi_miniapp_core::{
-    host_api_spec_json, HOST_API_VERSION, HOST_SDK_VERSION, SPEC_SCHEMA_VERSION,
-};
+use fabushi_miniapp_core::host_api_spec_json;
+use fabushi_miniapp_core::HOST_API_VERSION;
+use fabushi_miniapp_core::HOST_SDK_VERSION;
+use fabushi_miniapp_core::SPEC_SCHEMA_VERSION;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::path::PathBuf;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));

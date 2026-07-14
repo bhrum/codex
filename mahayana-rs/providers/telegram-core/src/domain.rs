@@ -1,4 +1,5 @@
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 macro_rules! id_type {
     ($name:ident, $inner:ty) => {

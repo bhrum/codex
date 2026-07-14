@@ -1,8 +1,19 @@
-use fabushi_telegram_core::{
-    Chat, ChatId, ChatKind, Command, DeliveryState, Event, FormattedText, Message, MessageContent,
-    MessageId, TelegramEngine, TelegramState, UserId,
-};
-use fabushi_telegram_storage::{EncryptedSqliteStore, StorageError, StorageKey};
+use fabushi_telegram_core::Chat;
+use fabushi_telegram_core::ChatId;
+use fabushi_telegram_core::ChatKind;
+use fabushi_telegram_core::Command;
+use fabushi_telegram_core::DeliveryState;
+use fabushi_telegram_core::Event;
+use fabushi_telegram_core::FormattedText;
+use fabushi_telegram_core::Message;
+use fabushi_telegram_core::MessageContent;
+use fabushi_telegram_core::MessageId;
+use fabushi_telegram_core::TelegramEngine;
+use fabushi_telegram_core::TelegramState;
+use fabushi_telegram_core::UserId;
+use fabushi_telegram_storage::EncryptedSqliteStore;
+use fabushi_telegram_storage::StorageError;
+use fabushi_telegram_storage::StorageKey;
 use rusqlite::Connection;
 use tempfile::tempdir;
 

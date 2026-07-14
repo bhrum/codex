@@ -1,4 +1,5 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::io::Read;
 use std::process::Command;
 use std::time::Duration;
@@ -1680,7 +1681,8 @@ mod tests {
 
     #[test]
     fn rust_http_fetch_reads_local_response() {
-        use std::io::{Read as _, Write};
+        use std::io::Read as _;
+        use std::io::Write;
         use std::net::TcpListener;
         use std::thread;
 

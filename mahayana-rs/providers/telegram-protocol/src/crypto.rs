@@ -1,12 +1,15 @@
-use aes::{
-    cipher::{generic_array::GenericArray, BlockDecrypt, BlockEncrypt, KeyInit},
-    Aes256,
-};
-use sha1::{Digest, Sha1};
+use aes::cipher::generic_array::GenericArray;
+use aes::cipher::BlockDecrypt;
+use aes::cipher::BlockEncrypt;
+use aes::cipher::KeyInit;
+use aes::Aes256;
+use sha1::Digest;
+use sha1::Sha1;
 use sha2::Sha256;
 use subtle::ConstantTimeEq;
 use thiserror::Error;
-use zeroize::{Zeroize, ZeroizeOnDrop};
+use zeroize::Zeroize;
+use zeroize::ZeroizeOnDrop;
 
 const AUTH_KEY_LENGTH: usize = 256;
 const AES_BLOCK_LENGTH: usize = 16;

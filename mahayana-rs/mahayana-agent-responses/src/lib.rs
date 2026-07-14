@@ -6,21 +6,33 @@
 //! Git, or unrestricted filesystem tools.
 
 use async_trait::async_trait;
-use mahayana_agent::{
-    AgentBackend, AgentError, AgentEvent, AgentMessageRequest, ApprovalResolution,
-    SharedAgentEventSink, StartThreadRequest,
-};
-use mahayana_core::{AgentThreadId, Message, MessageId, MessageRole, OperationId};
-use serde_json::{Value, json};
-use std::collections::{HashMap, HashSet};
+use mahayana_agent::AgentBackend;
+use mahayana_agent::AgentError;
+use mahayana_agent::AgentEvent;
+use mahayana_agent::AgentMessageRequest;
+use mahayana_agent::ApprovalResolution;
+use mahayana_agent::SharedAgentEventSink;
+use mahayana_agent::StartThreadRequest;
+use mahayana_core::AgentThreadId;
+use mahayana_core::Message;
+use mahayana_core::MessageId;
+use mahayana_core::MessageRole;
+use mahayana_core::OperationId;
+use serde_json::Value;
+use serde_json::json;
+use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 #[derive(Debug, Clone)]
 pub struct ResponsesAgentConfig {
     pub model: String,
     pub responses_base_url: String,
-    pub product_session_token: String,
+    /// Optional product account session. The first-party endpoint provides a
+    /// bounded anonymous allowance when this is absent.
+    pub product_session_token: Option<String>,
 }
 
 impl ResponsesAgentConfig {
@@ -35,11 +47,13 @@ impl ResponsesAgentConfig {
                 "Dacheng Responses endpoint must use HTTPS".into(),
             ));
         }
-        if self.product_session_token.trim().is_empty()
-            || self.product_session_token.contains(['\r', '\n'])
+        if self
+            .product_session_token
+            .as_deref()
+            .is_some_and(|token| token.trim().is_empty() || token.contains(['\r', '\n']))
         {
             return Err(AgentError::Unavailable(
-                "a valid Mahayana product session is required".into(),
+                "Mahayana product session is invalid".into(),
             ));
         }
         Ok(())
@@ -188,12 +202,11 @@ fn request_response(
             config.responses_base_url.trim_end_matches('/')
         )
     };
-    let response = ureq::post(&endpoint)
-        .set(
-            "Authorization",
-            &format!("Bearer {}", config.product_session_token),
-        )
-        .set("Accept", "application/json")
+    let mut request = ureq::post(&endpoint).set("Accept", "application/json");
+    if let Some(token) = config.product_session_token.as_deref() {
+        request = request.set("Authorization", &format!("Bearer {token}"));
+    }
+    let response = request
         .send_json(json!({
             "model": config.model,
             "input": input,
@@ -286,11 +299,21 @@ mod tests {
         let mut config = ResponsesAgentConfig {
             model: "deepseek-chat".into(),
             responses_base_url: "http://example.test/v1".into(),
-            product_session_token: "secret".into(),
+            product_session_token: Some("secret".into()),
         };
         assert!(config.validate().is_err());
         config.responses_base_url = "https://example.test/v1".into();
-        config.product_session_token = "secret\nInjected: yes".into();
+        config.product_session_token = Some("secret\nInjected: yes".into());
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn config_accepts_anonymous_first_party_allowance() {
+        let config = ResponsesAgentConfig {
+            model: "deepseek-chat".into(),
+            responses_base_url: "https://example.test/v1".into(),
+            product_session_token: None,
+        };
+        assert!(config.validate().is_ok());
     }
 }

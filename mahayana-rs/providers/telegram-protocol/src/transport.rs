@@ -1,5 +1,6 @@
 use crc32fast::Hasher;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 use thiserror::Error;
 
 const DEFAULT_MAX_FRAME_BYTES: usize = 64 * 1024 * 1024;

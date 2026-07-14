@@ -1,4 +1,5 @@
-use std::{collections::BTreeSet, net::IpAddr};
+use std::collections::BTreeSet;
+use std::net::IpAddr;
 
 use thiserror::Error;
 

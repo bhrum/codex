@@ -92,9 +92,14 @@ pub extern "C" fn fabushi_runtime_udp_close_json(request_json: *const c_char) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::{json, Value};
-    use std::ffi::{CStr, CString};
-    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+    use serde_json::json;
+    use serde_json::Value;
+    use std::ffi::CStr;
+    use std::ffi::CString;
+    use std::time::Duration;
+    use std::time::Instant;
+    use std::time::SystemTime;
+    use std::time::UNIX_EPOCH;
 
     #[test]
     fn execute_dispatches_typed_requests_with_extra() {

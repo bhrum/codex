@@ -1,61 +1,109 @@
 //! In-process Codex app-server adapter for the Mahayana Agent contract.
 
 use async_trait::async_trait;
-use codex_app_server_client::{
-    DEFAULT_IN_PROCESS_CHANNEL_CAPACITY, InProcessAppServerClient, InProcessAppServerRequestHandle,
-    InProcessClientStartArgs, InProcessServerEvent,
-};
-use codex_app_server_protocol::{
-    ClientRequest, JSONRPCErrorError, RequestId, ServerNotification, ServerRequest, ThreadItem,
-    ThreadStartParams, ThreadStartResponse, TurnInterruptParams, TurnInterruptResponse,
-    TurnStartParams, TurnStartResponse, TurnStatus, UserInput,
-};
+use codex_app_server_client::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY;
+use codex_app_server_client::InProcessAppServerClient;
+use codex_app_server_client::InProcessAppServerRequestHandle;
+use codex_app_server_client::InProcessClientStartArgs;
+use codex_app_server_client::InProcessServerEvent;
+use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::DynamicToolCallOutputContentItem;
+use codex_app_server_protocol::DynamicToolCallParams;
+use codex_app_server_protocol::DynamicToolCallResponse;
+use codex_app_server_protocol::DynamicToolFunctionSpec;
+use codex_app_server_protocol::DynamicToolNamespaceSpec;
+use codex_app_server_protocol::DynamicToolNamespaceTool;
+use codex_app_server_protocol::DynamicToolSpec;
+use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ServerNotification;
+use codex_app_server_protocol::ServerRequest;
+use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadStartParams;
+use codex_app_server_protocol::ThreadStartResponse;
+use codex_app_server_protocol::TurnInterruptParams;
+use codex_app_server_protocol::TurnInterruptResponse;
+use codex_app_server_protocol::TurnStartParams;
+use codex_app_server_protocol::TurnStartResponse;
+use codex_app_server_protocol::TurnStatus;
+use codex_app_server_protocol::UserInput;
 use codex_arg0::Arg0DispatchPaths;
-use codex_config::{CloudConfigBundleLoader, LoaderOverrides};
-use codex_core::config::{ConfigBuilder, ConfigOverrides};
+use codex_config::CloudConfigBundleLoader;
+use codex_config::LoaderOverrides;
+use codex_core::config::ConfigBuilder;
+use codex_core::config::ConfigOverrides;
 use codex_exec_server::EnvironmentManager;
+use codex_exec_server::ExecServerRuntimePaths;
 use codex_feedback::CodexFeedback;
-use codex_model_provider_info::{ModelProviderInfo, WireApi};
+use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::WireApi;
 use codex_protocol::config_types::SandboxMode;
-use codex_protocol::protocol::{AskForApproval, SessionSource};
-use mahayana_agent::{
-    AgentBackend, AgentError, AgentEvent, AgentMessageRequest, ApprovalResolution,
-    SharedAgentEventSink, StartThreadRequest,
-};
-use mahayana_core::{
-    AgentThreadId, ApprovalDecision, ApprovalId, Message, MessageId, MessageRole, OperationId,
-};
-use serde_json::{Value, json};
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::SessionSource;
+use mahayana_agent::AgentBackend;
+use mahayana_agent::AgentError;
+use mahayana_agent::AgentEvent;
+use mahayana_agent::AgentMessageRequest;
+use mahayana_agent::ApprovalResolution;
+use mahayana_agent::SharedAgentEventSink;
+use mahayana_agent::StartThreadRequest;
+use mahayana_conversation::ConversationProvider;
+use mahayana_conversation::provider_key_for_conversation_id;
+use mahayana_core::AgentThreadId;
+use mahayana_core::ApprovalDecision;
+use mahayana_core::ApprovalId;
+use mahayana_core::ConversationId;
+use mahayana_core::Message;
+use mahayana_core::MessageId;
+use mahayana_core::MessageRole;
+use mahayana_core::OperationId;
+use serde_json::Value;
+use serde_json::json;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicI64, Ordering};
-use std::sync::{Arc, Mutex, Weak};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::Weak;
+use std::sync::atomic::AtomicI64;
+use std::sync::atomic::Ordering;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 use tokio::sync::oneshot;
 
 const PROVIDER_ID: &str = "dacheng-deepseek";
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct CodexAgentConfig {
     pub codex_home: PathBuf,
     pub cwd: PathBuf,
     pub workspace_roots: Vec<PathBuf>,
     pub model: String,
     pub responses_base_url: String,
-    /// Fabushi/Alipay product session token. It is injected only into the
-    /// in-memory provider and is never written to Codex auth files.
-    pub product_session_token: String,
+    /// Optional Fabushi product session token. Logged-out users use the
+    /// first-party anonymous allowance; logged-in users get their account
+    /// quota. The token is injected only into the in-memory provider and is
+    /// never written to Codex auth files.
+    pub product_session_token: Option<String>,
     pub sandbox_mode: SandboxMode,
     pub approval_policy: AskForApproval,
+    /// Mahayana CLI executable used for Codex's hidden filesystem/process
+    /// helper modes. Embedded SDK hosts omit this because their application
+    /// executable does not implement Codex argv dispatch.
+    pub codex_executable_path: Option<PathBuf>,
+    /// Non-Agent providers owned by this same Mahayana Runtime. Codex receives
+    /// bounded read-only tools for inspecting their conversations.
+    pub conversation_providers: Vec<Arc<dyn ConversationProvider>>,
 }
 
 impl CodexAgentConfig {
     pub fn validate(&self) -> Result<(), AgentError> {
-        if self.product_session_token.trim().is_empty()
-            || self.product_session_token.contains(['\r', '\n'])
+        if self
+            .product_session_token
+            .as_deref()
+            .is_some_and(|token| token.trim().is_empty() || token.contains(['\r', '\n']))
         {
             return Err(AgentError::Unavailable(
-                "Fabushi/Alipay login is required before starting Codex".into(),
+                "Mahayana product session is invalid".into(),
             ));
         }
         if self.model.trim().is_empty() {
@@ -100,6 +148,7 @@ struct CodexAgentInner {
     next_request_id: AtomicI64,
     operations: Mutex<HashMap<OperationId, ActiveOperation>>,
     approvals: Mutex<HashMap<ApprovalId, PendingApproval>>,
+    conversation_providers: Vec<Arc<dyn ConversationProvider>>,
 }
 
 impl CodexAgentInner {
@@ -200,6 +249,15 @@ impl CodexAgentInner {
 
     async fn handle_server_request(&self, request: ServerRequest) -> Result<(), AgentError> {
         match request {
+            ServerRequest::DynamicToolCall { request_id, params } => {
+                let response = self.execute_dynamic_tool(params).await;
+                let response = serde_json::to_value(response)
+                    .map_err(|error| AgentError::Backend(error.to_string()))?;
+                self.requests
+                    .resolve_server_request(request_id, response)
+                    .await
+                    .map_err(|error| AgentError::Backend(error.to_string()))
+            }
             ServerRequest::CommandExecutionRequestApproval { request_id, params } => {
                 let details = serde_json::to_value(&params)
                     .map_err(|error| AgentError::Backend(error.to_string()))?;
@@ -276,6 +334,72 @@ impl CodexAgentInner {
                 )
                 .await
             }
+        }
+    }
+
+    async fn execute_dynamic_tool(&self, params: DynamicToolCallParams) -> DynamicToolCallResponse {
+        if params.namespace.as_deref() != Some("mahayana") {
+            return dynamic_tool_error("不支持的工具命名空间");
+        }
+        let result = match params.tool.as_str() {
+            "list_conversations" => {
+                let mut conversations = Vec::new();
+                for provider in &self.conversation_providers {
+                    match provider.list_conversations().await {
+                        Ok(items) => conversations.extend(items),
+                        Err(error) => {
+                            return dynamic_tool_error(&format!(
+                                "{} 联系人读取失败：{error}",
+                                provider.key()
+                            ));
+                        }
+                    }
+                }
+                conversations.sort_by(|left, right| {
+                    right
+                        .updated_at_ms
+                        .cmp(&left.updated_at_ms)
+                        .then_with(|| left.id.cmp(&right.id))
+                });
+                serde_json::to_value(conversations)
+            }
+            "conversation_history" => {
+                let Some(conversation_id) = params
+                    .arguments
+                    .get("conversationId")
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.trim().is_empty())
+                else {
+                    return dynamic_tool_error("conversationId 不能为空");
+                };
+                let conversation_id = ConversationId(conversation_id.to_string());
+                let provider_key = match provider_key_for_conversation_id(&conversation_id) {
+                    Ok(key) => key,
+                    Err(error) => return dynamic_tool_error(&error.to_string()),
+                };
+                let Some(provider) = self
+                    .conversation_providers
+                    .iter()
+                    .find(|provider| provider.key() == provider_key)
+                else {
+                    return dynamic_tool_error("该会话不属于当前大乘 Runtime");
+                };
+                let limit = params
+                    .arguments
+                    .get("limit")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(50)
+                    .clamp(1, 100) as u32;
+                match provider.history(&conversation_id, limit).await {
+                    Ok(messages) => serde_json::to_value(messages),
+                    Err(error) => return dynamic_tool_error(&error.to_string()),
+                }
+            }
+            _ => return dynamic_tool_error("不支持的大乘会话工具"),
+        };
+        match result {
+            Ok(value) => dynamic_tool_success(value),
+            Err(error) => dynamic_tool_error(&error.to_string()),
         }
     }
 
@@ -492,7 +616,7 @@ impl CodexAgentBackend {
             base_url: Some(settings.responses_base_url),
             env_key: None,
             env_key_instructions: None,
-            experimental_bearer_token: Some(settings.product_session_token),
+            experimental_bearer_token: settings.product_session_token,
             auth: None,
             aws: None,
             wire_api: WireApi::Responses,
@@ -509,13 +633,41 @@ impl CodexAgentBackend {
         config.model = Some(settings.model);
         config.model_provider_id = PROVIDER_ID.into();
         config.model_provider = provider.clone();
-        config.model_providers.insert(PROVIDER_ID.into(), provider);
+        config
+            .model_providers
+            .insert(PROVIDER_ID.into(), provider.clone());
+
+        // App-server derives a fresh Config for every thread. Keep the
+        // first-party provider in its in-memory CLI override layer as well as
+        // the startup Config so thread/start and resume see the exact same
+        // provider without writing credentials to config.toml.
+        let provider_override = toml::Value::try_from(&provider)
+            .map_err(|error| AgentError::Backend(error.to_string()))?;
+        let cli_overrides = vec![(format!("model_providers.{PROVIDER_ID}"), provider_override)];
 
         let config = Arc::new(config);
         let state_db = codex_core::init_state_db(config.as_ref()).await;
-        let environment_manager = EnvironmentManager::from_env(None)
-            .await
-            .map_err(|error| AgentError::Backend(error.to_string()))?;
+        let (arg0_paths, environment_manager) =
+            if let Some(codex_executable_path) = settings.codex_executable_path {
+                let arg0_paths = Arg0DispatchPaths {
+                    codex_self_exe: Some(codex_executable_path),
+                    ..Arg0DispatchPaths::default()
+                };
+                let local_runtime_paths = ExecServerRuntimePaths::from_optional_paths(
+                    arg0_paths.codex_self_exe.clone(),
+                    arg0_paths.codex_linux_sandbox_exe.clone(),
+                )
+                .map_err(|error| AgentError::Backend(error.to_string()))?;
+                let environment_manager = EnvironmentManager::from_env(Some(local_runtime_paths))
+                    .await
+                    .map_err(|error| AgentError::Backend(error.to_string()))?;
+                (arg0_paths, environment_manager)
+            } else {
+                (
+                    Arg0DispatchPaths::default(),
+                    EnvironmentManager::without_environments(),
+                )
+            };
         let config_warnings = config
             .startup_warnings
             .iter()
@@ -529,9 +681,9 @@ impl CodexAgentBackend {
             )
             .collect();
         let client = InProcessAppServerClient::start(InProcessClientStartArgs {
-            arg0_paths: Arg0DispatchPaths::default(),
+            arg0_paths,
             config: Arc::clone(&config),
-            cli_overrides: Vec::new(),
+            cli_overrides,
             loader_overrides,
             strict_config: false,
             cloud_config_bundle: CloudConfigBundleLoader::default(),
@@ -557,6 +709,7 @@ impl CodexAgentBackend {
             next_request_id: AtomicI64::new(1),
             operations: Mutex::new(HashMap::new()),
             approvals: Mutex::new(HashMap::new()),
+            conversation_providers: settings.conversation_providers,
         });
         tokio::spawn(dispatch_events(client, Arc::downgrade(&inner)));
         Ok(Self { inner })
@@ -583,6 +736,7 @@ impl AgentBackend for CodexAgentBackend {
                         self.inner.config.permissions.approval_policy.value().into(),
                     ),
                     ephemeral: Some(false),
+                    dynamic_tools: Some(mahayana_dynamic_tools()),
                     ..ThreadStartParams::default()
                 },
             })
@@ -685,6 +839,58 @@ impl AgentBackend for CodexAgentBackend {
     }
 }
 
+fn mahayana_dynamic_tools() -> Vec<DynamicToolSpec> {
+    vec![DynamicToolSpec::Namespace(DynamicToolNamespaceSpec {
+        name: "mahayana".into(),
+        description: "读取当前大乘 Runtime 中的 Telegram 与法布施联系人会话。".into(),
+        tools: vec![
+            DynamicToolNamespaceTool::Function(DynamicToolFunctionSpec {
+                name: "list_conversations".into(),
+                description: "列出当前大乘 Runtime 中可供 Codex 接入的联系人会话。".into(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false
+                }),
+                defer_loading: false,
+            }),
+            DynamicToolNamespaceTool::Function(DynamicToolFunctionSpec {
+                name: "conversation_history".into(),
+                description: "读取一个 Telegram 或法布施联系人会话的最近历史。".into(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "conversationId": {"type": "string"},
+                        "limit": {"type": "integer", "minimum": 1, "maximum": 100}
+                    },
+                    "required": ["conversationId"],
+                    "additionalProperties": false
+                }),
+                defer_loading: false,
+            }),
+        ],
+    })]
+}
+
+fn dynamic_tool_success(value: Value) -> DynamicToolCallResponse {
+    match serde_json::to_string(&value) {
+        Ok(text) if text.len() <= 32_000 => DynamicToolCallResponse {
+            content_items: vec![DynamicToolCallOutputContentItem::InputText { text }],
+            success: true,
+        },
+        _ => dynamic_tool_error("会话数据超过单次 Codex 上下文上限，请缩小查询范围"),
+    }
+}
+
+fn dynamic_tool_error(message: &str) -> DynamicToolCallResponse {
+    DynamicToolCallResponse {
+        content_items: vec![DynamicToolCallOutputContentItem::InputText {
+            text: json!({"error": message}).to_string(),
+        }],
+        success: false,
+    }
+}
+
 fn approval_response(kind: ApprovalResponseKind, decision: ApprovalDecision) -> Value {
     match kind {
         ApprovalResponseKind::CommandExecution | ApprovalResponseKind::FileChange => json!({
@@ -749,18 +955,20 @@ mod tests {
     }
 
     #[test]
-    fn rejects_missing_product_login_without_starting_codex() {
+    fn accepts_anonymous_product_session_for_first_party_allowance() {
         let config = CodexAgentConfig {
             codex_home: PathBuf::from("/tmp/mahayana-test"),
             cwd: PathBuf::from("/tmp"),
             workspace_roots: Vec::new(),
             model: "deepseek-chat".into(),
             responses_base_url: "https://example.test/v1".into(),
-            product_session_token: String::new(),
+            product_session_token: None,
             sandbox_mode: SandboxMode::ReadOnly,
             approval_policy: AskForApproval::OnRequest,
+            codex_executable_path: None,
+            conversation_providers: Vec::new(),
         };
-        assert!(matches!(config.validate(), Err(AgentError::Unavailable(_))));
+        assert!(config.validate().is_ok());
     }
 
     #[test]
@@ -771,13 +979,15 @@ mod tests {
             workspace_roots: Vec::new(),
             model: "deepseek-chat".into(),
             responses_base_url: "http://example.test/v1".into(),
-            product_session_token: "secret".into(),
+            product_session_token: Some("secret".into()),
             sandbox_mode: SandboxMode::ReadOnly,
             approval_policy: AskForApproval::OnRequest,
+            codex_executable_path: None,
+            conversation_providers: Vec::new(),
         };
         assert!(config.validate().is_err());
         config.responses_base_url = "https://example.test/v1".into();
-        config.product_session_token = "secret\nInjected: yes".into();
+        config.product_session_token = Some("secret\nInjected: yes".into());
         assert!(config.validate().is_err());
     }
 }

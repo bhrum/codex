@@ -9,7 +9,10 @@ publish = false
 [lib]
 name = "mahayana_runtime"
 path = "src/lib.rs"
-crate-type = ["rlib", "cdylib", "staticlib"]
+# iOS requests `staticlib` explicitly from its Xcode build script. Keeping it
+# out of the default crate types avoids producing a multi-gigabyte unused
+# archive every time the desktop CLI is linked.
+crate-type = ["rlib", "cdylib"]
 doctest = false
 
 [features]
@@ -35,6 +38,7 @@ fabushi-telegram-runtime = { path = "../providers/telegram-runtime" }
 mahayana-agent.workspace = true
 mahayana-agent-codex = { path = "../mahayana-agent-codex", optional = true }
 mahayana-agent-responses = { workspace = true, optional = true }
+mahayana-conversation.workspace = true
 mahayana-core.workspace = true
 mahayana-miniapp.workspace = true
 mahayana-product = { path = "../mahayana-product" }

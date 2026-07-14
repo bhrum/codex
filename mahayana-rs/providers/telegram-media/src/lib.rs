@@ -3,7 +3,8 @@
 //! Network and file-system adapters perform actual I/O. This crate owns the
 //! ordering, progress, pause/resume, retry, concurrency, and integrity rules.
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 use std::collections::BTreeMap;
 use thiserror::Error;
 

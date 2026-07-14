@@ -2,16 +2,18 @@
 
 mod runtime;
 
-pub use runtime::{
-    close_client, create_client, create_persistent_client, execute_json, RuntimeError,
-};
+pub use runtime::close_client;
+pub use runtime::create_client;
+pub use runtime::create_persistent_client;
+pub use runtime::execute_json;
+pub use runtime::RuntimeError;
 
 use serde_json::json;
-use std::{
-    ffi::{CStr, CString},
-    os::raw::c_char,
-    panic::{catch_unwind, AssertUnwindSafe},
-};
+use std::ffi::CStr;
+use std::ffi::CString;
+use std::os::raw::c_char;
+use std::panic::catch_unwind;
+use std::panic::AssertUnwindSafe;
 
 #[no_mangle]
 pub extern "C" fn fabushi_telegram_create_client() -> u64 {

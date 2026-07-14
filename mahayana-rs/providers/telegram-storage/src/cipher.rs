@@ -1,12 +1,16 @@
 use crate::StorageError;
-use chacha20poly1305::{
-    aead::{Aead, KeyInit, Payload},
-    XChaCha20Poly1305, XNonce,
-};
-use hmac::{Hmac, Mac};
-use rand_core::{OsRng, RngCore};
+use chacha20poly1305::aead::Aead;
+use chacha20poly1305::aead::KeyInit;
+use chacha20poly1305::aead::Payload;
+use chacha20poly1305::XChaCha20Poly1305;
+use chacha20poly1305::XNonce;
+use hmac::Hmac;
+use hmac::Mac;
+use rand_core::OsRng;
+use rand_core::RngCore;
 use sha2::Sha256;
-use zeroize::{Zeroize, ZeroizeOnDrop};
+use zeroize::Zeroize;
+use zeroize::ZeroizeOnDrop;
 
 const PAYLOAD_VERSION: u8 = 1;
 const NONCE_LENGTH: usize = 24;

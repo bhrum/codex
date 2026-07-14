@@ -2,26 +2,42 @@
 
 use mahayana_agent::UnavailableAgentBackend;
 #[cfg(feature = "desktop-full")]
-use mahayana_agent_codex::{CodexAgentBackend, CodexAgentConfig};
+use mahayana_agent_codex::CodexAgentBackend;
+#[cfg(feature = "desktop-full")]
+use mahayana_agent_codex::CodexAgentConfig;
 #[cfg(feature = "mobile-embedded")]
-use mahayana_agent_responses::{ResponsesAgentBackend, ResponsesAgentConfig};
-use mahayana_core::{
-    ApprovalDecision, ApprovalId, BuildProfile, OperationId, RuntimeCommand, RuntimeConfig,
-};
-use mahayana_miniapp::{MiniAppConversationProvider, MiniAppDefinition};
+use mahayana_agent_responses::ResponsesAgentBackend;
+#[cfg(feature = "mobile-embedded")]
+use mahayana_agent_responses::ResponsesAgentConfig;
+#[cfg(feature = "desktop-full")]
+use mahayana_conversation::ConversationProvider;
+use mahayana_core::ApprovalDecision;
+use mahayana_core::ApprovalId;
+use mahayana_core::BuildProfile;
+use mahayana_core::OperationId;
+use mahayana_core::RuntimeCommand;
+use mahayana_core::RuntimeConfig;
+use mahayana_miniapp::MiniAppConversationProvider;
+use mahayana_miniapp::MiniAppDefinition;
 use mahayana_product::MahayanaProductClient;
-use mahayana_runtime_core::{MahayanaRuntime, RuntimeBuilder};
+use mahayana_product::default_mahayana_home;
+use mahayana_runtime_core::MahayanaRuntime;
+use mahayana_runtime_core::RuntimeBuilder;
 use mahayana_social::MahayanaSocialConversationProvider;
 use mahayana_telegram::TelegramConversationProvider;
 use once_cell::sync::Lazy;
-use serde_json::{Value, json};
+use serde_json::Value;
+use serde_json::json;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::ffi::{CStr, CString};
+use std::ffi::CStr;
+use std::ffi::CString;
 use std::os::raw::c_char;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 static NEXT_RUNTIME_ID: AtomicU64 = AtomicU64::new(1);
@@ -43,6 +59,9 @@ struct RuntimeCreateConfig {
     product_session_token: Option<String>,
     product_session_path: Option<PathBuf>,
     codex_home: Option<PathBuf>,
+    /// Optional Mahayana CLI executable that supports Codex argv helper
+    /// dispatch. SDK hosts omit it and run the Agent without local exec tools.
+    codex_executable_path: Option<PathBuf>,
     cwd: Option<PathBuf>,
     /// Existing embedded Telegram client created by the platform login flow.
     telegram_client_id: Option<u64>,
@@ -107,27 +126,33 @@ fn build_runtime(create: RuntimeCreateConfig) -> Result<MahayanaRuntime, String>
         .filter(|value| !value.trim().is_empty())
         .or_else(|| product_client.session_token().ok());
     let mut builder = RuntimeBuilder::new(runtime_config.clone());
+    #[cfg(feature = "desktop-full")]
+    let mut codex_conversation_providers: Vec<Arc<dyn ConversationProvider>> = Vec::new();
     if let Some(token) = session_token.as_ref() {
+        let provider = Arc::new(MahayanaSocialConversationProvider::new(
+            product_client,
+            Some(token.clone()),
+        ));
+        #[cfg(feature = "desktop-full")]
+        codex_conversation_providers.push(Arc::clone(&provider) as Arc<dyn ConversationProvider>);
         builder = builder
-            .with_provider(Arc::new(MahayanaSocialConversationProvider::new(
-                product_client,
-                Some(token.clone()),
-            )))
+            .with_provider(provider)
             .map_err(|error| error.to_string())?;
     }
     if let Some(telegram_client_id) = create.telegram_client_id {
+        let provider = Arc::new(TelegramConversationProvider::from_client_id(
+            telegram_client_id,
+            create.telegram_self_user_id.unwrap_or_default(),
+        ));
+        #[cfg(feature = "desktop-full")]
+        codex_conversation_providers.push(Arc::clone(&provider) as Arc<dyn ConversationProvider>);
         builder = builder
-            .with_provider(Arc::new(TelegramConversationProvider::from_client_id(
-                telegram_client_id,
-                create.telegram_self_user_id.unwrap_or_default(),
-            )))
+            .with_provider(provider)
             .map_err(|error| error.to_string())?;
     }
 
     #[cfg(feature = "desktop-full")]
-    if runtime_config.build_profile == BuildProfile::DesktopFull
-        && let Some(product_session_token) = session_token.clone()
-    {
+    if runtime_config.build_profile == BuildProfile::DesktopFull {
         let cwd = create
             .cwd
             .or_else(|| std::env::current_dir().ok())
@@ -159,9 +184,11 @@ fn build_runtime(create: RuntimeCreateConfig) -> Result<MahayanaRuntime, String>
             workspace_roots,
             model: runtime_config.model.model.clone(),
             responses_base_url,
-            product_session_token,
+            product_session_token: session_token.clone(),
             sandbox_mode: codex_protocol::config_types::SandboxMode::WorkspaceWrite,
             approval_policy: codex_protocol::protocol::AskForApproval::OnRequest,
+            codex_executable_path: create.codex_executable_path,
+            conversation_providers: codex_conversation_providers,
         };
         return builder
             .build_with_agent_backend_and(
@@ -178,9 +205,7 @@ fn build_runtime(create: RuntimeCreateConfig) -> Result<MahayanaRuntime, String>
     }
 
     #[cfg(feature = "mobile-embedded")]
-    if runtime_config.build_profile == BuildProfile::MobileEmbedded
-        && let Some(product_session_token) = session_token.clone()
-    {
+    if runtime_config.build_profile == BuildProfile::MobileEmbedded {
         let settings = ResponsesAgentConfig {
             model: runtime_config.model.model.clone(),
             responses_base_url: runtime_config
@@ -188,7 +213,7 @@ fn build_runtime(create: RuntimeCreateConfig) -> Result<MahayanaRuntime, String>
                 .base_url
                 .clone()
                 .ok_or_else(|| "Dacheng Responses base URL is required".to_string())?,
-            product_session_token,
+            product_session_token: session_token.clone(),
         };
         return builder
             .build_with_agent_backend_and(
@@ -204,11 +229,7 @@ fn build_runtime(create: RuntimeCreateConfig) -> Result<MahayanaRuntime, String>
             .map_err(|error| error.to_string());
     }
 
-    let unavailable_reason = if session_token.is_none() {
-        "请先使用支付宝登录；登录后重建本地大乘 Runtime"
-    } else {
-        "this platform build has no embedded Codex backend"
-    };
+    let unavailable_reason = "this platform build has no embedded Codex backend";
     let backend: Arc<dyn mahayana_agent::AgentBackend> =
         Arc::new(UnavailableAgentBackend::new(unavailable_reason));
     let miniapp = MiniAppConversationProvider::new(Arc::clone(&backend), mini_apps)
@@ -240,6 +261,11 @@ fn default_mini_apps() -> Vec<MiniAppDefinition> {
             "协助整理并发布自媒体内容，敏感操作必须请求确认。",
         ),
         (
+            "official.bot-father",
+            "机器人之父",
+            "根据用户描述开发、修改和调试大乘个人沙箱小程序。若当前环境支持并明确要求文件工具，就直接修改工作区；否则只回复一份完整、自包含、少于 1800 个字符的单文件 HTML。HTML 必须从 <!DOCTYPE html> 开始并以 </html> 结束，CSS 和 JavaScript 内联，不使用 Markdown 围栏，不附加解释。",
+        ),
+        (
             "official.assistant",
             "大乘助手",
             "提供大乘软件功能引导和日常协助。",
@@ -257,12 +283,7 @@ fn default_mini_apps() -> Vec<MiniAppDefinition> {
 
 #[cfg(feature = "desktop-full")]
 fn default_codex_home() -> PathBuf {
-    std::env::var_os("MAHAYANA_HOME")
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".mahayana")))
-        .unwrap_or_else(|| PathBuf::from(".mahayana"))
-        .join("codex")
+    default_mahayana_home().join("codex")
 }
 
 /// Executes one command against a runtime and returns an owned JSON string.

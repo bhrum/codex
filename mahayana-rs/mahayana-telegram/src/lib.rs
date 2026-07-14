@@ -1,21 +1,30 @@
 //! Telegram conversation adapter for the shared Mahayana runtime.
 
 use async_trait::async_trait;
-use fabushi_telegram_core::{MessageContent, TelegramState};
-use fabushi_telegram_runtime::{
-    close_client, create_client, create_persistent_client, execute_json,
-};
-use mahayana_conversation::{
-    ConversationError, ConversationProvider, ResolveApprovalRequest, SendMessageRequest,
-    SharedConversationEventSink,
-};
-use mahayana_core::{
-    Conversation, ConversationId, Message, MessageId, MessageRole, OperationId, PeerKind,
-    RuntimeEvent,
-};
-use serde_json::{Value, json};
+use fabushi_telegram_core::MessageContent;
+use fabushi_telegram_core::TelegramState;
+use fabushi_telegram_runtime::close_client;
+use fabushi_telegram_runtime::create_client;
+use fabushi_telegram_runtime::create_persistent_client;
+use fabushi_telegram_runtime::execute_json;
+use mahayana_conversation::ConversationError;
+use mahayana_conversation::ConversationProvider;
+use mahayana_conversation::ResolveApprovalRequest;
+use mahayana_conversation::SendMessageRequest;
+use mahayana_conversation::SharedConversationEventSink;
+use mahayana_core::Conversation;
+use mahayana_core::ConversationId;
+use mahayana_core::Message;
+use mahayana_core::MessageId;
+use mahayana_core::MessageRole;
+use mahayana_core::OperationId;
+use mahayana_core::PeerKind;
+use mahayana_core::RuntimeEvent;
+use serde_json::Value;
+use serde_json::json;
 use std::path::Path;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::AtomicI64;
+use std::sync::atomic::Ordering;
 
 const CONVERSATION_PREFIX: &str = "telegram:chat:";
 
@@ -293,7 +302,8 @@ fn media_text(label: &str, caption: &str) -> String {
 }
 
 fn now_ms() -> i64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::time::SystemTime;
+    use std::time::UNIX_EPOCH;
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -305,11 +315,16 @@ fn now_ms() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fabushi_telegram_core::{
-        Chat, ChatId, ChatKind, DeliveryState, FormattedText, Message as TelegramMessage,
-        MessageId as TelegramMessageId, UserId,
-    };
-    use std::sync::{Arc, Mutex};
+    use fabushi_telegram_core::Chat;
+    use fabushi_telegram_core::ChatId;
+    use fabushi_telegram_core::ChatKind;
+    use fabushi_telegram_core::DeliveryState;
+    use fabushi_telegram_core::FormattedText;
+    use fabushi_telegram_core::Message as TelegramMessage;
+    use fabushi_telegram_core::MessageId as TelegramMessageId;
+    use fabushi_telegram_core::UserId;
+    use std::sync::Arc;
+    use std::sync::Mutex;
 
     #[derive(Default)]
     struct EventCollector(Mutex<Vec<RuntimeEvent>>);

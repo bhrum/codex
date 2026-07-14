@@ -1,7 +1,11 @@
-use fabushi_telegram_media::{
-    MediaFileId, TransferCommand, TransferDirection, TransferError, TransferId, TransferPriority,
-    TransferQueue, TransferState,
-};
+use fabushi_telegram_media::MediaFileId;
+use fabushi_telegram_media::TransferCommand;
+use fabushi_telegram_media::TransferDirection;
+use fabushi_telegram_media::TransferError;
+use fabushi_telegram_media::TransferId;
+use fabushi_telegram_media::TransferPriority;
+use fabushi_telegram_media::TransferQueue;
+use fabushi_telegram_media::TransferState;
 
 fn enqueue(
     queue: &mut TransferQueue,

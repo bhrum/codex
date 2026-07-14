@@ -1,5 +1,6 @@
 use fabushi_telegram_wasm::TelegramWasmClient;
-use serde_json::{json, Value};
+use serde_json::json;
+use serde_json::Value;
 
 fn execute(client: &mut TelegramWasmClient, request: Value) -> Value {
     serde_json::from_str(&client.execute_json(&request.to_string())).unwrap()

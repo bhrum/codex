@@ -3,7 +3,9 @@ use crate::error::RuntimeError;
 use crate::file_state;
 use crate::network;
 use crate::storage;
-use serde_json::{json, Map, Value};
+use serde_json::json;
+use serde_json::Map;
+use serde_json::Value;
 
 const SUPPORTED_METHODS: &[&str] = &[
     "runtime.getStatus",

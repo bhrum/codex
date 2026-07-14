@@ -1,6 +1,7 @@
 //! Stable product contracts shared by every Mahayana surface.
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 use serde_json::Value;
 use std::fmt;
 use std::path::PathBuf;

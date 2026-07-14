@@ -1,9 +1,22 @@
-use crate::domain::{
-    Chat, ChatDraft, ChatFolder, ChatFolderId, ChatId, ClientRequestId, DeliveryState, Message,
-    MessageContent, MessageId, ReactionCount, TypingAction, UserId,
-};
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::collections::{BTreeMap, BTreeSet};
+use crate::domain::Chat;
+use crate::domain::ChatDraft;
+use crate::domain::ChatFolder;
+use crate::domain::ChatFolderId;
+use crate::domain::ChatId;
+use crate::domain::ClientRequestId;
+use crate::domain::DeliveryState;
+use crate::domain::Message;
+use crate::domain::MessageContent;
+use crate::domain::MessageId;
+use crate::domain::ReactionCount;
+use crate::domain::TypingAction;
+use crate::domain::UserId;
+use serde::Deserialize;
+use serde::Deserializer;
+use serde::Serialize;
+use serde::Serializer;
+use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

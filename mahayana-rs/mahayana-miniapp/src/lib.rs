@@ -1,23 +1,37 @@
 //! Mini-app peers backed by the same embedded Agent as the Codex contact.
 
 use async_trait::async_trait;
-use mahayana_agent::{
-    AgentBackend, AgentError, AgentEvent, AgentEventSink, AgentMessageRequest, ApprovalResolution,
-    SharedAgentEventSink, StartThreadRequest,
-};
-use mahayana_conversation::{
-    ConversationError, ConversationProvider, ResolveApprovalRequest, SendMessageRequest,
-    SharedConversationEventSink,
-};
-use mahayana_core::{
-    AgentThreadId, Conversation, ConversationId, Message, MessageId, MessageRole, OperationId,
-    PeerKind, RuntimeEvent,
-};
-use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use mahayana_agent::AgentBackend;
+use mahayana_agent::AgentError;
+use mahayana_agent::AgentEvent;
+use mahayana_agent::AgentEventSink;
+use mahayana_agent::AgentMessageRequest;
+use mahayana_agent::ApprovalResolution;
+use mahayana_agent::SharedAgentEventSink;
+use mahayana_agent::StartThreadRequest;
+use mahayana_conversation::ConversationError;
+use mahayana_conversation::ConversationProvider;
+use mahayana_conversation::ResolveApprovalRequest;
+use mahayana_conversation::SendMessageRequest;
+use mahayana_conversation::SharedConversationEventSink;
+use mahayana_core::AgentThreadId;
+use mahayana_core::Conversation;
+use mahayana_core::ConversationId;
+use mahayana_core::Message;
+use mahayana_core::MessageId;
+use mahayana_core::MessageRole;
+use mahayana_core::OperationId;
+use mahayana_core::PeerKind;
+use mahayana_core::RuntimeEvent;
+use serde::Deserialize;
+use serde::Serialize;
+use serde_json::Value;
+use serde_json::json;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 use tokio::sync::Mutex as AsyncMutex;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -286,7 +300,8 @@ mod tests {
     use super::*;
     use mahayana_agent::AgentMessageRequest;
     use mahayana_conversation::ConversationEventSink;
-    use mahayana_core::{ApprovalDecision, ApprovalId};
+    use mahayana_core::ApprovalDecision;
+    use mahayana_core::ApprovalId;
 
     struct EchoAgent;
 

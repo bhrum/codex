@@ -4,18 +4,37 @@
 //! cryptography, and authorization state remain in `telegram-protocol` so the
 //! same protocol implementation can be reused by native and Web transports.
 
-use std::{
-    io::{self, Read, Write},
-    net::{Shutdown, SocketAddr, TcpStream},
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
+use std::io::Read;
+use std::io::Write;
+use std::io::{self};
+use std::net::Shutdown;
+use std::net::SocketAddr;
+use std::net::TcpStream;
+use std::time::Duration;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
-use fabushi_telegram_protocol::{
-    decrypt_message, encrypt_message, AuthKey, AuthKeyHandshake, CryptoDirection, CryptoError,
-    DcDirectory, DcError, DcPurpose, DhGenAction, EncryptedEnvelope, HandshakeError,
-    MessageIdError, MessageIdGuard, PlainMessage, PlaintextEnvelope, SequenceError,
-    SessionSequence, TransportError, TransportFrameCodec, TransportMode,
-};
+use fabushi_telegram_protocol::decrypt_message;
+use fabushi_telegram_protocol::encrypt_message;
+use fabushi_telegram_protocol::AuthKey;
+use fabushi_telegram_protocol::AuthKeyHandshake;
+use fabushi_telegram_protocol::CryptoDirection;
+use fabushi_telegram_protocol::CryptoError;
+use fabushi_telegram_protocol::DcDirectory;
+use fabushi_telegram_protocol::DcError;
+use fabushi_telegram_protocol::DcPurpose;
+use fabushi_telegram_protocol::DhGenAction;
+use fabushi_telegram_protocol::EncryptedEnvelope;
+use fabushi_telegram_protocol::HandshakeError;
+use fabushi_telegram_protocol::MessageIdError;
+use fabushi_telegram_protocol::MessageIdGuard;
+use fabushi_telegram_protocol::PlainMessage;
+use fabushi_telegram_protocol::PlaintextEnvelope;
+use fabushi_telegram_protocol::SequenceError;
+use fabushi_telegram_protocol::SessionSequence;
+use fabushi_telegram_protocol::TransportError;
+use fabushi_telegram_protocol::TransportFrameCodec;
+use fabushi_telegram_protocol::TransportMode;
 use thiserror::Error;
 use zeroize::Zeroizing;
 

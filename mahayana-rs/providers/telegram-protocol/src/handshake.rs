@@ -1,13 +1,17 @@
-use crate::{
-    crypto::{aes_ige_decrypt, aes_ige_encrypt, CryptoError},
-    tl::{TlError, TlReader, TlWriter},
-};
+use crate::crypto::aes_ige_decrypt;
+use crate::crypto::aes_ige_encrypt;
+use crate::crypto::CryptoError;
+use crate::tl::TlError;
+use crate::tl::TlReader;
+use crate::tl::TlWriter;
 use num_bigint_dig::BigUint;
-use sha1::{Digest as Sha1Digest, Sha1};
+use sha1::Digest as Sha1Digest;
+use sha1::Sha1;
 use sha2::Sha256;
 use subtle::ConstantTimeEq;
 use thiserror::Error;
-use zeroize::{Zeroize, Zeroizing};
+use zeroize::Zeroize;
+use zeroize::Zeroizing;
 
 pub const REQ_PQ_MULTI_CONSTRUCTOR: u32 = 0xbe7e_8ef1;
 pub const RES_PQ_CONSTRUCTOR: u32 = 0x0516_2463;

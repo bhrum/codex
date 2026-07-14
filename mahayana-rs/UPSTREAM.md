@@ -10,6 +10,10 @@ upstream https://github.com/openai/codex.git
 Mahayana work branches from a reviewed `upstream/main` commit. Product code
 belongs under `mahayana-rs/`; modifications below `codex-rs/` require a short
 compatibility note in the commit message and a focused upstream-diff review.
+The directory boundary is only an upstream-audit boundary: Mahayana crates use
+local path dependencies on this checkout's `codex-rs` crates and ship them in
+one executable/SDK. There is no runtime dependency on an upstream Codex binary
+or service.
 
 Current reviewed base:
 

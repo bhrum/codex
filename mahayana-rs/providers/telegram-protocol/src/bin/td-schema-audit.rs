@@ -1,8 +1,12 @@
-use fabushi_telegram_protocol::{
-    audit_schema, parse_schema_catalog, MTPROTO_API_BASELINE, TD_API_BASELINE,
-    TD_API_PINNED_COMMIT, TELEGRAM_API_BASELINE,
-};
-use std::{env, fs, process};
+use fabushi_telegram_protocol::audit_schema;
+use fabushi_telegram_protocol::parse_schema_catalog;
+use fabushi_telegram_protocol::MTPROTO_API_BASELINE;
+use fabushi_telegram_protocol::TD_API_BASELINE;
+use fabushi_telegram_protocol::TD_API_PINNED_COMMIT;
+use fabushi_telegram_protocol::TELEGRAM_API_BASELINE;
+use std::env;
+use std::fs;
+use std::process;
 
 fn main() {
     let arguments: Vec<_> = env::args().skip(1).collect();

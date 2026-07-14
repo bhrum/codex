@@ -1,5 +1,8 @@
-use crate::tl::{TlError, TlReader, TlWriter};
-use serde::{Deserialize, Serialize};
+use crate::tl::TlError;
+use crate::tl::TlReader;
+use crate::tl::TlWriter;
+use serde::Deserialize;
+use serde::Serialize;
 use thiserror::Error;
 
 pub const UPDATES_GET_STATE_CONSTRUCTOR: u32 = 0xedd4_882a;

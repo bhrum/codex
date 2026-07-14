@@ -5,21 +5,41 @@
 //! the configured Responses provider; there is no remote Agent gateway and no
 //! desktop shell, process, or Git capability.
 
-use mahayana_core::{
-    ApprovalId, BuildProfile, CONVERSATION_SCHEMA_VERSION, Conversation, ConversationId,
-    DEFAULT_DACHENG_RESPONSES_BASE_URL, DEFAULT_DEEPSEEK_MODEL, MODEL_RUNTIME_VERSION, Message,
-    MessageId, MessageRole, ModelProviderMode, OperationId, PeerKind, RUNTIME_ABI_VERSION,
-    RuntimeCommand, RuntimeEvent, RuntimeResponse, RuntimeStatus,
-};
+use mahayana_core::ApprovalId;
+use mahayana_core::BuildProfile;
+use mahayana_core::CONVERSATION_SCHEMA_VERSION;
+use mahayana_core::Conversation;
+use mahayana_core::ConversationId;
+use mahayana_core::DEFAULT_DACHENG_RESPONSES_BASE_URL;
+use mahayana_core::DEFAULT_DEEPSEEK_MODEL;
+use mahayana_core::MODEL_RUNTIME_VERSION;
+use mahayana_core::Message;
+use mahayana_core::MessageId;
+use mahayana_core::MessageRole;
+use mahayana_core::ModelProviderMode;
+use mahayana_core::OperationId;
+use mahayana_core::PeerKind;
+use mahayana_core::RUNTIME_ABI_VERSION;
+use mahayana_core::RuntimeCommand;
+use mahayana_core::RuntimeEvent;
+use mahayana_core::RuntimeResponse;
+use mahayana_core::RuntimeStatus;
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::Value;
+use serde_json::json;
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::HashMap;
+use std::collections::HashSet;
+use std::collections::VecDeque;
 use std::rc::Rc;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
-use wasm_bindgen_futures::{JsFuture, spawn_local};
-use web_sys::{Request, RequestInit, RequestMode, Response};
+use wasm_bindgen_futures::JsFuture;
+use wasm_bindgen_futures::spawn_local;
+use web_sys::Request;
+use web_sys::RequestInit;
+use web_sys::RequestMode;
+use web_sys::Response;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -145,16 +165,6 @@ impl MahayanaWebRuntime {
                 }
                 let (operation_id, input, config) = {
                     let mut state = self.state.borrow_mut();
-                    let token_available = state
-                        .config
-                        .product_session_token
-                        .as_deref()
-                        .is_some_and(|token| !token.trim().is_empty());
-                    if !token_available {
-                        return Err(JsValue::from_str(
-                            "请先使用支付宝登录；浏览器不会回退到云端 Agent",
-                        ));
-                    }
                     let operation_id = OperationId(state.next_id("operation"));
                     let message_id = client_message_id
                         .and_then(|id| MessageId::new(id).ok())
@@ -286,11 +296,6 @@ fn spawn_inference(
 }
 
 async fn fetch_response(config: &WebConfig, input: Vec<Value>) -> Result<String, String> {
-    let token = config
-        .product_session_token
-        .as_deref()
-        .filter(|token| !token.trim().is_empty())
-        .ok_or_else(|| "Mahayana product session is required".to_string())?;
     let endpoint = if config.responses_base_url.ends_with("/responses") {
         config.responses_base_url.clone()
     } else {
@@ -311,10 +316,16 @@ async fn fetch_response(config: &WebConfig, input: Vec<Value>) -> Result<String,
     options.set_body(&JsValue::from_str(&body));
     let request = Request::new_with_str_and_init(&endpoint, &options)
         .map_err(|_| "could not create Responses request".to_string())?;
-    request
-        .headers()
-        .set("Authorization", &format!("Bearer {token}"))
-        .map_err(|_| "could not set Responses authorization".to_string())?;
+    if let Some(token) = config
+        .product_session_token
+        .as_deref()
+        .filter(|token| !token.trim().is_empty())
+    {
+        request
+            .headers()
+            .set("Authorization", &format!("Bearer {token}"))
+            .map_err(|_| "could not set Responses authorization".to_string())?;
+    }
     request
         .headers()
         .set("Content-Type", "application/json")
@@ -394,7 +405,7 @@ fn miniapp_prompt(conversation_id: &ConversationId, text: &str) -> String {
     }
 }
 
-fn miniapps() -> [(&'static str, &'static str, &'static str); 4] {
+fn miniapps() -> [(&'static str, &'static str, &'static str); 5] {
     [
         (
             "official.global-dharma",
@@ -410,6 +421,11 @@ fn miniapps() -> [(&'static str, &'static str, &'static str); 4] {
             "official.platform-publish",
             "平台发布",
             "协助整理并发布自媒体内容。",
+        ),
+        (
+            "official.bot-father",
+            "机器人之父",
+            "根据用户描述开发、修改和调试大乘个人沙箱小程序。只回复一份完整、自包含、少于 1800 个字符的单文件 HTML。HTML 必须从 <!DOCTYPE html> 开始并以 </html> 结束，CSS 和 JavaScript 内联，不使用 Markdown 围栏，不附加解释。",
         ),
         (
             "official.assistant",
@@ -461,12 +477,17 @@ mod tests {
     #[test]
     fn web_contact_list_has_codex_and_official_miniapps() {
         let conversations = browser_conversations();
-        assert_eq!(conversations.len(), 5);
+        assert_eq!(conversations.len(), 6);
         assert_eq!(conversations[0].id.as_str(), "codex:agent:assistant");
         assert!(
             conversations
                 .iter()
                 .any(|item| item.id.as_str() == "miniapp:official.flashcards")
+        );
+        assert!(
+            conversations
+                .iter()
+                .any(|item| item.id.as_str() == "miniapp:official.bot-father")
         );
     }
 }

@@ -1,14 +1,17 @@
-use std::{
-    io::{Read, Write},
-    net::{TcpListener, TcpStream},
-    thread,
-    time::Duration,
-};
+use std::io::Read;
+use std::io::Write;
+use std::net::TcpListener;
+use std::net::TcpStream;
+use std::thread;
+use std::time::Duration;
 
-use fabushi_telegram_network::{establish_auth_key, NetworkConfig, TcpTransport};
-use fabushi_telegram_protocol::{
-    DcDirectory, PlaintextEnvelope, TransportFrameCodec, TransportMode,
-};
+use fabushi_telegram_network::establish_auth_key;
+use fabushi_telegram_network::NetworkConfig;
+use fabushi_telegram_network::TcpTransport;
+use fabushi_telegram_protocol::DcDirectory;
+use fabushi_telegram_protocol::PlaintextEnvelope;
+use fabushi_telegram_protocol::TransportFrameCodec;
+use fabushi_telegram_protocol::TransportMode;
 
 #[test]
 fn abridged_transport_handles_fragmented_tcp_reads_and_writes() {

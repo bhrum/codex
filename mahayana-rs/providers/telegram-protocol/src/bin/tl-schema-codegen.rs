@@ -1,8 +1,12 @@
-use fabushi_telegram_protocol::{
-    audit_mtproto_api_schema, audit_telegram_api_schema, parse_schema_catalog, DeclarationKind,
-    SchemaCatalog,
-};
-use std::{env, fs, path::Path, process};
+use fabushi_telegram_protocol::audit_mtproto_api_schema;
+use fabushi_telegram_protocol::audit_telegram_api_schema;
+use fabushi_telegram_protocol::parse_schema_catalog;
+use fabushi_telegram_protocol::DeclarationKind;
+use fabushi_telegram_protocol::SchemaCatalog;
+use std::env;
+use std::fs;
+use std::path::Path;
+use std::process;
 
 fn main() {
     let arguments: Vec<_> = env::args().skip(1).collect();

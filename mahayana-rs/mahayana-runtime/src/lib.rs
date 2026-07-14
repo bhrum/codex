@@ -1,24 +1,47 @@
 //! Long-lived local conversation runtime used by all Mahayana frontends.
 
-use crossbeam_channel::{Receiver, RecvTimeoutError, Sender};
-use mahayana_agent::{
-    AgentBackend, AgentError, AgentEvent, AgentEventSink, AgentMessageRequest, ApprovalResolution,
-    SharedAgentEventSink, StartThreadRequest,
-};
-use mahayana_conversation::{
-    ConversationError, ConversationEventSink, ConversationProvider, ProviderRegistry,
-    ResolveApprovalRequest, SendMessageRequest, SharedConversationEventSink,
-};
-use mahayana_core::{
-    AgentThreadId, ApprovalId, CONVERSATION_SCHEMA_VERSION, Conversation, ConversationId,
-    MODEL_RUNTIME_VERSION, Message, MessageId, MessageRole, OperationId, RUNTIME_ABI_VERSION,
-    RuntimeCommand, RuntimeConfig, RuntimeEvent, RuntimeResponse, RuntimeStatus,
-};
+use crossbeam_channel::Receiver;
+use crossbeam_channel::RecvTimeoutError;
+use crossbeam_channel::Sender;
+use mahayana_agent::AgentBackend;
+use mahayana_agent::AgentError;
+use mahayana_agent::AgentEvent;
+use mahayana_agent::AgentEventSink;
+use mahayana_agent::AgentMessageRequest;
+use mahayana_agent::ApprovalResolution;
+use mahayana_agent::SharedAgentEventSink;
+use mahayana_agent::StartThreadRequest;
+use mahayana_conversation::ConversationError;
+use mahayana_conversation::ConversationEventSink;
+use mahayana_conversation::ConversationProvider;
+use mahayana_conversation::ProviderRegistry;
+use mahayana_conversation::ResolveApprovalRequest;
+use mahayana_conversation::SendMessageRequest;
+use mahayana_conversation::SharedConversationEventSink;
+use mahayana_core::AgentThreadId;
+use mahayana_core::ApprovalId;
+use mahayana_core::CONVERSATION_SCHEMA_VERSION;
+use mahayana_core::Conversation;
+use mahayana_core::ConversationId;
+use mahayana_core::MODEL_RUNTIME_VERSION;
+use mahayana_core::Message;
+use mahayana_core::MessageId;
+use mahayana_core::MessageRole;
+use mahayana_core::OperationId;
+use mahayana_core::RUNTIME_ABI_VERSION;
+use mahayana_core::RuntimeCommand;
+use mahayana_core::RuntimeConfig;
+use mahayana_core::RuntimeEvent;
+use mahayana_core::RuntimeResponse;
+use mahayana_core::RuntimeStatus;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::future::Future;
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::time::Duration;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 use tokio::sync::Mutex as AsyncMutex;
 
 pub struct RuntimeBuilder {
@@ -297,6 +320,11 @@ fn create_async_runtime() -> Result<tokio::runtime::Runtime, RuntimeError> {
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .thread_name("mahayana-runtime")
+        // Codex app-server thread creation walks a large typed protocol and
+        // configuration graph. The platform default (commonly 2 MiB) can
+        // overflow on the first embedded thread/turn even though the same
+        // code works in the standalone Codex process.
+        .thread_stack_size(16 * 1024 * 1024)
         .build()
         .map_err(|error| RuntimeError::Initialization(error.to_string()))
 }
@@ -537,7 +565,8 @@ pub enum RuntimeError {
 mod tests {
     use super::*;
     use async_trait::async_trait;
-    use mahayana_core::{ApprovalDecision, CODEX_ASSISTANT_CONVERSATION_ID};
+    use mahayana_core::ApprovalDecision;
+    use mahayana_core::CODEX_ASSISTANT_CONVERSATION_ID;
 
     struct EchoAgent;
 

@@ -1,9 +1,12 @@
 //! Agent abstraction used by the conversation runtime.
 
 use async_trait::async_trait;
-use mahayana_core::{
-    AgentThreadId, ApprovalDecision, ApprovalId, ConversationId, Message, OperationId,
-};
+use mahayana_core::AgentThreadId;
+use mahayana_core::ApprovalDecision;
+use mahayana_core::ApprovalId;
+use mahayana_core::ConversationId;
+use mahayana_core::Message;
+use mahayana_core::OperationId;
 use serde_json::Value;
 use std::sync::Arc;
 

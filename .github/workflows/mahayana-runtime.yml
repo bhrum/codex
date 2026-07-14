@@ -39,6 +39,11 @@ jobs:
           --package mahayana-social
           --package mahayana-telegram
       - run: >-
+          cargo test --locked --manifest-path mahayana-rs/Cargo.toml
+          --package mahayana-agent-codex
+          --package mahayana-product
+          --package mahayana-cli
+      - run: >-
           cargo check --locked --manifest-path mahayana-rs/Cargo.toml
           --package mahayana-agent-codex
           --package mahayana-ffi

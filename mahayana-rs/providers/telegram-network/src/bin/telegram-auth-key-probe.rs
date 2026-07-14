@@ -1,6 +1,8 @@
-use std::{env, process};
+use std::env;
+use std::process;
 
-use fabushi_telegram_network::{establish_auth_key, NetworkConfig};
+use fabushi_telegram_network::establish_auth_key;
+use fabushi_telegram_network::NetworkConfig;
 use fabushi_telegram_protocol::DcDirectory;
 
 fn main() {

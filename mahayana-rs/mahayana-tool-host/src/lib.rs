@@ -2,7 +2,8 @@
 
 use async_trait::async_trait;
 use mahayana_core::BuildProfile;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 use serde_json::Value;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

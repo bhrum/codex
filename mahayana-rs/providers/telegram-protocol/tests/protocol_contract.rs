@@ -1,46 +1,128 @@
-use fabushi_telegram_protocol::{
-    aes_ige_encrypt, build_auth_send_code, build_auth_sign_in, build_auth_sign_up,
-    build_init_connection_get_config, build_msgs_ack, build_p_q_inner_data_dc, build_req_dh_params,
-    decrypt_message, decrypt_server_dh_inner_data, derive_aes_key_iv, derive_tmp_aes_key_iv,
-    encrypt_message, factor_res_pq, parse_dh_gen_result, parse_schema_catalog,
-    parse_server_dh_params, parse_td_api_schema, prepare_client_dh, quick_ack_token,
-    rsa_pad_with_random, select_server_key_fingerprint, telegram_server_rsa_key,
-    wire_constructor_by_name, wire_constructors_by_id, AuthCommand, AuthError, AuthKey,
-    AuthKeyHandshake, AuthKeyHandshakeState, AuthorizationMachine, AuthorizationState,
-    CodeDeliveryType, CryptoDirection, CryptoError, DeclarationKind, DhGenAction, DhGenResult,
-    EncryptedEnvelope, HandshakeError, MessageIdError, MessageIdGuard, PasswordSrpParameters,
-    PlainMessage, PlaintextEnvelope, RequestSequencer, ResPq, RsaPublicKey, SchemaParseError,
-    SchemaStats, ServerDhInnerData, ServerDhParams, SessionSequence, TlError, TlReader, TlWriter,
-    TransportError, TransportFrameCodec, TransportMode, WireSchema, DH_GEN_OK_CONSTRUCTOR,
-    KNOWN_DH_PRIME_HEX, P_Q_INNER_DATA_DC_CONSTRUCTOR, REQ_DH_PARAMS_CONSTRUCTOR,
-    REQ_PQ_MULTI_CONSTRUCTOR, RES_PQ_CONSTRUCTOR, SERVER_DH_INNER_DATA_CONSTRUCTOR,
-    SERVER_DH_PARAMS_OK_CONSTRUCTOR, SET_CLIENT_DH_PARAMS_CONSTRUCTOR, WIRE_CONSTRUCTORS,
-};
-use fabushi_telegram_protocol::{
-    build_account_get_password, build_auth_check_password, compute_password_srp_proof_with_random,
-    parse_account_password_prefix, parse_auth_sent_code, parse_config_dc_directory_prefix,
-    try_parse_rpc_error, ApiRequestError, InitConnection, NextCodeType, SentCode, SentCodeDelivery,
-    SentCodeResult, ACCOUNT_GET_PASSWORD_CONSTRUCTOR, ACCOUNT_PASSWORD_CONSTRUCTOR,
-    AUTH_CHECK_PASSWORD_CONSTRUCTOR, AUTH_SEND_CODE_CONSTRUCTOR, AUTH_SENT_CODE_CONSTRUCTOR,
-    AUTH_SIGN_IN_CONSTRUCTOR, AUTH_SIGN_UP_CONSTRUCTOR, CODE_SETTINGS_CONSTRUCTOR,
-    CONFIG_CONSTRUCTOR, DC_OPTION_CONSTRUCTOR, HELP_GET_CONFIG_CONSTRUCTOR,
-    INIT_CONNECTION_CONSTRUCTOR, INPUT_CHECK_PASSWORD_SRP_CONSTRUCTOR,
-    INVOKE_WITH_LAYER_CONSTRUCTOR, MSGS_ACK_CONSTRUCTOR, MTPROTO_LAYER,
-    PASSWORD_KDF_ALGO_CONSTRUCTOR,
-};
-use fabushi_telegram_protocol::{
-    build_updates_get_difference, build_updates_get_state, parse_terminal_difference,
-    parse_update_state, DifferenceRequest, TerminalDifference, UpdateState,
-    UPDATES_DIFFERENCE_EMPTY_CONSTRUCTOR, UPDATES_GET_DIFFERENCE_CONSTRUCTOR,
-    UPDATES_GET_STATE_CONSTRUCTOR, UPDATES_STATE_CONSTRUCTOR,
-};
-use fabushi_telegram_protocol::{
-    classify_rpc_error, DcDirectory, DcEndpoint, DcError, DcPurpose, DcRoute, MigrationDirective,
-    MigrationKind, RpcErrorAction,
-};
+use fabushi_telegram_protocol::aes_ige_encrypt;
+use fabushi_telegram_protocol::build_account_get_password;
+use fabushi_telegram_protocol::build_auth_check_password;
+use fabushi_telegram_protocol::build_auth_send_code;
+use fabushi_telegram_protocol::build_auth_sign_in;
+use fabushi_telegram_protocol::build_auth_sign_up;
+use fabushi_telegram_protocol::build_init_connection_get_config;
+use fabushi_telegram_protocol::build_msgs_ack;
+use fabushi_telegram_protocol::build_p_q_inner_data_dc;
+use fabushi_telegram_protocol::build_req_dh_params;
+use fabushi_telegram_protocol::build_updates_get_difference;
+use fabushi_telegram_protocol::build_updates_get_state;
+use fabushi_telegram_protocol::classify_rpc_error;
+use fabushi_telegram_protocol::compute_password_srp_proof_with_random;
+use fabushi_telegram_protocol::decrypt_message;
+use fabushi_telegram_protocol::decrypt_server_dh_inner_data;
+use fabushi_telegram_protocol::derive_aes_key_iv;
+use fabushi_telegram_protocol::derive_tmp_aes_key_iv;
+use fabushi_telegram_protocol::encrypt_message;
+use fabushi_telegram_protocol::factor_res_pq;
+use fabushi_telegram_protocol::parse_account_password_prefix;
+use fabushi_telegram_protocol::parse_auth_sent_code;
+use fabushi_telegram_protocol::parse_config_dc_directory_prefix;
+use fabushi_telegram_protocol::parse_dh_gen_result;
+use fabushi_telegram_protocol::parse_schema_catalog;
+use fabushi_telegram_protocol::parse_server_dh_params;
+use fabushi_telegram_protocol::parse_td_api_schema;
+use fabushi_telegram_protocol::parse_terminal_difference;
+use fabushi_telegram_protocol::parse_update_state;
+use fabushi_telegram_protocol::prepare_client_dh;
+use fabushi_telegram_protocol::quick_ack_token;
+use fabushi_telegram_protocol::rsa_pad_with_random;
+use fabushi_telegram_protocol::select_server_key_fingerprint;
+use fabushi_telegram_protocol::telegram_server_rsa_key;
+use fabushi_telegram_protocol::try_parse_rpc_error;
+use fabushi_telegram_protocol::wire_constructor_by_name;
+use fabushi_telegram_protocol::wire_constructors_by_id;
+use fabushi_telegram_protocol::ApiRequestError;
+use fabushi_telegram_protocol::AuthCommand;
+use fabushi_telegram_protocol::AuthError;
+use fabushi_telegram_protocol::AuthKey;
+use fabushi_telegram_protocol::AuthKeyHandshake;
+use fabushi_telegram_protocol::AuthKeyHandshakeState;
+use fabushi_telegram_protocol::AuthorizationMachine;
+use fabushi_telegram_protocol::AuthorizationState;
+use fabushi_telegram_protocol::CodeDeliveryType;
+use fabushi_telegram_protocol::CryptoDirection;
+use fabushi_telegram_protocol::CryptoError;
+use fabushi_telegram_protocol::DcDirectory;
+use fabushi_telegram_protocol::DcEndpoint;
+use fabushi_telegram_protocol::DcError;
+use fabushi_telegram_protocol::DcPurpose;
+use fabushi_telegram_protocol::DcRoute;
+use fabushi_telegram_protocol::DeclarationKind;
+use fabushi_telegram_protocol::DhGenAction;
+use fabushi_telegram_protocol::DhGenResult;
+use fabushi_telegram_protocol::DifferenceRequest;
+use fabushi_telegram_protocol::EncryptedEnvelope;
+use fabushi_telegram_protocol::HandshakeError;
+use fabushi_telegram_protocol::InitConnection;
+use fabushi_telegram_protocol::MessageIdError;
+use fabushi_telegram_protocol::MessageIdGuard;
+use fabushi_telegram_protocol::MigrationDirective;
+use fabushi_telegram_protocol::MigrationKind;
+use fabushi_telegram_protocol::NextCodeType;
+use fabushi_telegram_protocol::PasswordSrpParameters;
+use fabushi_telegram_protocol::PlainMessage;
+use fabushi_telegram_protocol::PlaintextEnvelope;
+use fabushi_telegram_protocol::RequestSequencer;
+use fabushi_telegram_protocol::ResPq;
+use fabushi_telegram_protocol::RpcErrorAction;
+use fabushi_telegram_protocol::RsaPublicKey;
+use fabushi_telegram_protocol::SchemaParseError;
+use fabushi_telegram_protocol::SchemaStats;
+use fabushi_telegram_protocol::SentCode;
+use fabushi_telegram_protocol::SentCodeDelivery;
+use fabushi_telegram_protocol::SentCodeResult;
+use fabushi_telegram_protocol::ServerDhInnerData;
+use fabushi_telegram_protocol::ServerDhParams;
+use fabushi_telegram_protocol::SessionSequence;
+use fabushi_telegram_protocol::TerminalDifference;
+use fabushi_telegram_protocol::TlError;
+use fabushi_telegram_protocol::TlReader;
+use fabushi_telegram_protocol::TlWriter;
+use fabushi_telegram_protocol::TransportError;
+use fabushi_telegram_protocol::TransportFrameCodec;
+use fabushi_telegram_protocol::TransportMode;
+use fabushi_telegram_protocol::UpdateState;
+use fabushi_telegram_protocol::WireSchema;
+use fabushi_telegram_protocol::ACCOUNT_GET_PASSWORD_CONSTRUCTOR;
+use fabushi_telegram_protocol::ACCOUNT_PASSWORD_CONSTRUCTOR;
+use fabushi_telegram_protocol::AUTH_CHECK_PASSWORD_CONSTRUCTOR;
+use fabushi_telegram_protocol::AUTH_SEND_CODE_CONSTRUCTOR;
+use fabushi_telegram_protocol::AUTH_SENT_CODE_CONSTRUCTOR;
+use fabushi_telegram_protocol::AUTH_SIGN_IN_CONSTRUCTOR;
+use fabushi_telegram_protocol::AUTH_SIGN_UP_CONSTRUCTOR;
+use fabushi_telegram_protocol::CODE_SETTINGS_CONSTRUCTOR;
+use fabushi_telegram_protocol::CONFIG_CONSTRUCTOR;
+use fabushi_telegram_protocol::DC_OPTION_CONSTRUCTOR;
+use fabushi_telegram_protocol::DH_GEN_OK_CONSTRUCTOR;
+use fabushi_telegram_protocol::HELP_GET_CONFIG_CONSTRUCTOR;
+use fabushi_telegram_protocol::INIT_CONNECTION_CONSTRUCTOR;
+use fabushi_telegram_protocol::INPUT_CHECK_PASSWORD_SRP_CONSTRUCTOR;
+use fabushi_telegram_protocol::INVOKE_WITH_LAYER_CONSTRUCTOR;
+use fabushi_telegram_protocol::KNOWN_DH_PRIME_HEX;
+use fabushi_telegram_protocol::MSGS_ACK_CONSTRUCTOR;
+use fabushi_telegram_protocol::MTPROTO_LAYER;
+use fabushi_telegram_protocol::PASSWORD_KDF_ALGO_CONSTRUCTOR;
+use fabushi_telegram_protocol::P_Q_INNER_DATA_DC_CONSTRUCTOR;
+use fabushi_telegram_protocol::REQ_DH_PARAMS_CONSTRUCTOR;
+use fabushi_telegram_protocol::REQ_PQ_MULTI_CONSTRUCTOR;
+use fabushi_telegram_protocol::RES_PQ_CONSTRUCTOR;
+use fabushi_telegram_protocol::SERVER_DH_INNER_DATA_CONSTRUCTOR;
+use fabushi_telegram_protocol::SERVER_DH_PARAMS_OK_CONSTRUCTOR;
+use fabushi_telegram_protocol::SET_CLIENT_DH_PARAMS_CONSTRUCTOR;
+use fabushi_telegram_protocol::UPDATES_DIFFERENCE_EMPTY_CONSTRUCTOR;
+use fabushi_telegram_protocol::UPDATES_GET_DIFFERENCE_CONSTRUCTOR;
+use fabushi_telegram_protocol::UPDATES_GET_STATE_CONSTRUCTOR;
+use fabushi_telegram_protocol::UPDATES_STATE_CONSTRUCTOR;
+use fabushi_telegram_protocol::WIRE_CONSTRUCTORS;
 use num_bigint_dig::BigUint;
-use serde_json::{json, Map};
-use sha1::{Digest, Sha1};
+use serde_json::json;
+use serde_json::Map;
+use sha1::Digest;
+use sha1::Sha1;
 
 #[test]
 fn authorization_requires_parameters_before_phone_number() {
