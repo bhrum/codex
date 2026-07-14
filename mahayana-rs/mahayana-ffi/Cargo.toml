@@ -9,10 +9,11 @@ publish = false
 [lib]
 name = "mahayana_runtime"
 path = "src/lib.rs"
-# iOS requests `staticlib` explicitly from its Xcode build script. Keeping it
-# out of the default crate types avoids producing a multi-gigabyte unused
-# archive every time the desktop CLI is linked.
-crate-type = ["rlib", "cdylib"]
+# iOS and desktop build scripts request `staticlib` or `cdylib` explicitly via
+# command line options when producing native runtime bundles. Keeping dynamic/static
+# libraries out of the default crate-type list avoids producing multi-gigabyte unused
+# archives during `cargo test` and prevents x86_64 ELF linker errors when linking V8 on Linux.
+crate-type = ["rlib"]
 doctest = false
 
 [features]
