@@ -1,0 +1,18 @@
+[package]
+name = "fabushi-telegram-core"
+version = "0.1.0"
+edition = "2021"
+description = "Platform-neutral Rust domain core for Fabushi messaging and Telegram-compatible feature migration."
+publish = false
+
+[lib]
+name = "fabushi_telegram_core"
+path = "src/lib.rs"
+crate-type = ["rlib", "cdylib", "staticlib"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+thiserror = "1"
+
+[dev-dependencies]
+serde_json = "1"

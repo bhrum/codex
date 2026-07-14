@@ -1,0 +1,13 @@
+[package]
+name = "mahayana-conversation"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Unified provider registry for AI, contacts, and MiniApps."
+publish = false
+
+[dependencies]
+async-trait.workspace = true
+mahayana-core.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

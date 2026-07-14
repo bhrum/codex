@@ -1,4 +1,3 @@
-#![allow(clippy::expect_used)]
 use codex_login::CODEX_API_KEY_ENV_VAR;
 use std::path::Path;
 use tempfile::TempDir;
@@ -17,6 +16,7 @@ impl TestCodexExecBuilder {
         );
         cmd.current_dir(self.cwd.path())
             .env("CODEX_HOME", self.home.path())
+            .env("CODEX_SQLITE_HOME", self.home.path())
             .env(CODEX_API_KEY_ENV_VAR, "dummy");
         cmd
     }

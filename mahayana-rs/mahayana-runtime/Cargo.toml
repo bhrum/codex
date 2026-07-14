@@ -1,0 +1,29 @@
+[package]
+name = "mahayana-runtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Long-lived local Mahayana conversation runtime."
+publish = false
+
+[features]
+default = ["desktop-full", "local-only"]
+desktop-full = []
+mobile-embedded = []
+web-wasm = []
+local-only = []
+remote-model-provider = []
+telemetry = []
+
+[dependencies]
+async-trait.workspace = true
+crossbeam-channel.workspace = true
+mahayana-agent.workspace = true
+mahayana-conversation.workspace = true
+mahayana-core.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

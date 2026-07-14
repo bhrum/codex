@@ -1,0 +1,79 @@
+name: Mahayana Runtime
+
+on:
+  pull_request:
+    paths:
+      - 'mahayana-rs/**'
+      - 'codex-rs/app-server-client/**'
+      - '.github/workflows/mahayana-runtime.yml'
+  push:
+    branches:
+      - 'codex/mahayana-runtime'
+    paths:
+      - 'mahayana-rs/**'
+      - 'codex-rs/app-server-client/**'
+      - '.github/workflows/mahayana-runtime.yml'
+  schedule:
+    - cron: '17 3 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  focused-runtime:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: rustfmt
+      - run: cargo fmt --manifest-path mahayana-rs/Cargo.toml --all -- --check
+      - run: >-
+          cargo test --locked --manifest-path mahayana-rs/Cargo.toml --lib
+          --package mahayana-core
+          --package mahayana-agent-responses
+          --package mahayana-runtime
+          --package mahayana-miniapp
+          --package mahayana-social
+          --package mahayana-telegram
+      - run: >-
+          cargo test --locked --manifest-path mahayana-rs/Cargo.toml
+          --package mahayana-agent-codex
+          --package mahayana-product
+          --package mahayana-cli
+      - run: >-
+          cargo check --locked --manifest-path mahayana-rs/Cargo.toml
+          --package mahayana-agent-codex
+          --package mahayana-ffi
+          --package mahayana-cli
+      - run: >-
+          cargo check --locked --manifest-path mahayana-rs/Cargo.toml
+          --package mahayana-ffi --no-default-features
+          --features mobile-embedded,local-only
+      - run: >-
+          cargo check --locked --manifest-path mahayana-rs/Cargo.toml
+          --target wasm32-unknown-unknown --package mahayana-web
+
+  upstream-drift:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Report reviewed upstream drift
+        run: |
+          set -euo pipefail
+          reviewed="$(sed -n 's/^commit=//p' mahayana-rs/UPSTREAM.lock)"
+          git fetch https://github.com/openai/codex.git main
+          latest="$(git rev-parse FETCH_HEAD)"
+          behind="$(git rev-list --count "$reviewed..$latest")"
+          {
+            echo "### Mahayana upstream audit"
+            echo
+            echo "Reviewed: \`$reviewed\`"
+            echo "Latest: \`$latest\`"
+            echo "Commits awaiting review: **$behind**"
+          } >> "$GITHUB_STEP_SUMMARY"

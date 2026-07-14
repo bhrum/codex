@@ -1,0 +1,16 @@
+[package]
+name = "fabushi-telegram-media"
+version = "0.1.0"
+edition = "2021"
+description = "Resumable media transfer state machine and scheduler for Fabushi Telegram migration."
+publish = false
+
+[lib]
+name = "fabushi_telegram_media"
+path = "src/lib.rs"
+crate-type = ["rlib", "cdylib", "staticlib"]
+
+[dependencies]
+hex = "0.4"
+serde = { version = "1", features = ["derive"] }
+thiserror = "1"

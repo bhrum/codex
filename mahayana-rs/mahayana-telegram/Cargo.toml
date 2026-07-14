@@ -1,0 +1,17 @@
+[package]
+name = "mahayana-telegram"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+async-trait.workspace = true
+fabushi-telegram-core = { path = "../providers/telegram-core" }
+fabushi-telegram-runtime = { path = "../providers/telegram-runtime" }
+mahayana-conversation.workspace = true
+mahayana-core.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true

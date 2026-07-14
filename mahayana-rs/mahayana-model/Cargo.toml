@@ -1,0 +1,14 @@
+[package]
+name = "mahayana-model"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Local and explicitly configured model runtime abstraction."
+publish = false
+
+[dependencies]
+async-trait.workspace = true
+mahayana-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

@@ -1,0 +1,19 @@
+[package]
+name = "mahayana-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "mahayana"
+path = "src/main.rs"
+
+[dependencies]
+codex-arg0.workspace = true
+fabushi-miniapp-core = { path = "../providers/miniapp-core" }
+fabushi-miniapp-runtime = { path = "../providers/fabushi-miniapp-runtime" }
+mahayana-ffi = { path = "../mahayana-ffi" }
+mahayana-product = { path = "../mahayana-product" }
+rpassword.workspace = true
+serde_json.workspace = true

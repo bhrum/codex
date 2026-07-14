@@ -1,0 +1,15 @@
+[package]
+name = "mahayana-agent-responses"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Sandboxed in-process Agent backend for mobile Responses inference."
+publish = false
+
+[dependencies]
+async-trait.workspace = true
+mahayana-agent.workspace = true
+mahayana-core.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+ureq.workspace = true
