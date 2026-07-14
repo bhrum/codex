@@ -1123,6 +1123,7 @@ pub fn init_data_payload(fields: &BTreeMap<String, String>) -> String {
         .join("\n")
 }
 
+#[allow(clippy::too_many_arguments)]
 fn capability(
     id: &'static str,
     layer: CapabilityLayer,
@@ -1461,6 +1462,7 @@ fn sha256(input: &[u8]) -> [u8; 32] {
     let bit_len = (input.len() as u64) * 8;
     let mut message = input.to_vec();
     message.push(0x80);
+    #[allow(clippy::manual_is_multiple_of)]
     while (message.len() + 8) % 64 != 0 {
         message.push(0);
     }

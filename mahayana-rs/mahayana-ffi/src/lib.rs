@@ -265,7 +265,8 @@ fn default_codex_home() -> PathBuf {
 fn default_codex_home_if_available() -> Option<PathBuf> {
     #[cfg(feature = "desktop-full")]
     {
-        return Some(default_codex_home());
+        #[allow(clippy::needless_return)]
+        Some(default_codex_home())
     }
     #[cfg(not(feature = "desktop-full"))]
     {

@@ -240,7 +240,7 @@ fn send_udp(job: &Value, endpoint: &Value) -> Result<Value, RuntimeError> {
             response
                 .get("sentBytes")
                 .and_then(Value::as_u64)
-                .unwrap_or(datagram.as_bytes().len() as u64),
+                .unwrap_or(datagram.len() as u64),
         );
         responses.push(response);
     }
@@ -356,7 +356,7 @@ fn endpoint_payload_body(endpoint: &Value) -> Option<String> {
 }
 
 fn udp_datagrams(packet_body: &str) -> Vec<String> {
-    let packet_bytes = packet_body.as_bytes().len();
+    let packet_bytes = packet_body.len();
     if packet_bytes <= UDP_SAFE_DATAGRAM_BYTES {
         return vec![packet_body.to_string()];
     }
