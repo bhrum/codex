@@ -28,6 +28,10 @@ mobile-embedded = [
     "dep:codex-protocol",
     "dep:mahayana-agent-codex",
 ]
+linux-shared = [
+    "mahayana-runtime-core/mobile-embedded",
+    "dep:codex-protocol",
+]
 web-wasm = ["mahayana-runtime-core/web-wasm"]
 local-only = ["mahayana-runtime-core/local-only"]
 remote-model-provider = ["mahayana-runtime-core/remote-model-provider"]

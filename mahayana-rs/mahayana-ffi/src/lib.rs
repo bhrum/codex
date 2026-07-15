@@ -9,6 +9,7 @@ use mahayana_agent_codex::CodexAgentConfig;
 use mahayana_conversation::ConversationProvider;
 use mahayana_core::ApprovalDecision;
 use mahayana_core::ApprovalId;
+#[cfg(any(feature = "desktop-full", feature = "mobile-embedded"))]
 use mahayana_core::BuildProfile;
 use mahayana_core::OperationId;
 use mahayana_core::RuntimeCommand;
