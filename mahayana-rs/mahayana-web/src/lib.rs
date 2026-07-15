@@ -163,6 +163,17 @@ impl MahayanaWebRuntime {
                 if text.trim().is_empty() {
                     return Err(JsValue::from_str("message text must not be empty"));
                 }
+                let config = self.state.borrow().config.clone();
+                if config
+                    .product_session_token
+                    .as_deref()
+                    .map_or(true, |token| token.trim().is_empty())
+                    && !conversation_id.as_str().starts_with("miniapp:")
+                {
+                    return Err(JsValue::from_str(
+                        "Web Agent accepted an unauthenticated request.",
+                    ));
+                }
                 let (operation_id, input, config) = {
                     let mut state = self.state.borrow_mut();
                     let operation_id = OperationId(state.next_id("operation"));
