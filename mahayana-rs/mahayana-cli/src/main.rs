@@ -1,9 +1,16 @@
+use clap::Parser;
+use clap::Subcommand;
+use codex_cli::plugin_cmd::PluginCli;
+use codex_cli::plugin_cmd::PluginSubcommand;
+use codex_core_plugins::plugin_bundle_archive::pack_plugin_bundle_tar_gz;
+use mahayana_plugin_host::LocalPlugin;
 use mahayana_product::MahayanaProductClient;
 use mahayana_product::redact_secrets;
 use mahayana_runtime::mahayana_runtime_close;
 use mahayana_runtime::mahayana_runtime_create;
 use mahayana_runtime::mahayana_runtime_execute;
 use mahayana_runtime::mahayana_runtime_free_string;
+use mahayana_runtime::mahayana_runtime_interrupt;
 use mahayana_runtime::mahayana_runtime_last_error;
 use mahayana_runtime::mahayana_runtime_receive;
 use mahayana_runtime::mahayana_runtime_resolve_approval;
@@ -20,39 +27,196 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::thread;
 use std::time::Duration;
-use std::time::SystemTime;
-use std::time::UNIX_EPOCH;
+
+mod chat_tui;
+mod plugin_dev;
+mod plugin_dev_template;
+
+#[derive(Debug, Parser)]
+#[command(
+    name = "mahayana",
+    version,
+    about = "大乘 CLI：Codex、插件、MCP 与 Mini App 统一宿主"
+)]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<CliCommand>,
+}
+
+#[derive(Debug, Subcommand)]
+enum CliCommand {
+    Login {
+        #[arg(trailing_var_arg = true)]
+        args: Vec<String>,
+    },
+    Register {
+        #[arg(trailing_var_arg = true)]
+        args: Vec<String>,
+    },
+    SendCode {
+        email: String,
+    },
+    Logout,
+    Auth,
+    /// 查看服务端权威的模型 Token 用量与剩余额度。
+    Usage,
+    Status,
+    #[command(alias = "list")]
+    Contacts,
+    History {
+        conversation_id: String,
+    },
+    Send {
+        conversation_id: String,
+        #[arg(required = true, trailing_var_arg = true)]
+        text: Vec<String>,
+    },
+    Chat {
+        conversation_id: Option<String>,
+    },
+    Miniapp {
+        #[arg(required = true, trailing_var_arg = true)]
+        args: Vec<String>,
+    },
+    Marketplace {
+        #[command(subcommand)]
+        command: MarketplaceCommand,
+    },
+    Plugin {
+        #[command(subcommand)]
+        command: PluginCommand,
+    },
+    Wallet {
+        #[command(subcommand)]
+        command: WalletCommand,
+    },
+    Purchases {
+        #[command(subcommand)]
+        command: PurchasesCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum MarketplaceCommand {
+    Browse,
+    Search { query: String },
+}
+
+#[derive(Debug, Subcommand)]
+enum PluginCommand {
+    /// Non-destructively add a conversational MCP plugin under plugins/<name>.
+    Init {
+        name: String,
+        #[arg(long, default_value = ".")]
+        repository: PathBuf,
+        #[arg(long)]
+        title: Option<String>,
+    },
+    List {
+        #[arg(long, short = 'm')]
+        marketplace: Option<String>,
+        #[arg(long)]
+        available: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    Info {
+        plugin_id: String,
+    },
+    Install {
+        plugin: String,
+        #[arg(long, short = 'm')]
+        marketplace: Option<String>,
+        #[arg(long)]
+        json: bool,
+        /// Permit bundled stdio/local runtimes after source validation.
+        #[arg(long)]
+        allow_local: bool,
+    },
+    Update {
+        plugin: String,
+        #[arg(long, short = 'm')]
+        marketplace: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    Uninstall {
+        plugin: String,
+        #[arg(long, short = 'm')]
+        marketplace: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    Open {
+        plugin_id: String,
+    },
+    Run {
+        plugin_id: String,
+        command: String,
+        #[arg(long, value_name = "ARGUMENTS")]
+        json: Option<String>,
+    },
+    Validate {
+        path: PathBuf,
+    },
+    Pack {
+        path: PathBuf,
+        #[arg(long, short = 'o')]
+        output: Option<PathBuf>,
+    },
+    Publish {
+        path: PathBuf,
+        #[arg(long)]
+        plugin_id: String,
+        #[arg(long)]
+        version: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum WalletCommand {
+    Balance,
+    History,
+    TopUp {
+        sku: String,
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum PurchasesCommand {
+    List,
+    Restore,
+}
 
 fn main() {
     let arg0_guard = codex_arg0::arg0_dispatch();
     let codex_executable_path = arg0_guard
         .as_ref()
         .and_then(|guard| guard.paths().codex_self_exe.as_deref());
-    if let Err(error) = run(codex_executable_path) {
+    if let Err(error) = run(codex_executable_path, Cli::parse()) {
         eprintln!("错误：{error}");
         std::process::exit(1);
     }
 }
 
-fn run(codex_executable_path: Option<&Path>) -> Result<(), String> {
-    let mut args = std::env::args().skip(1);
-    match args.next().as_deref() {
-        Some("login") => login(args.collect()),
-        Some("register") => register(args.collect()),
-        Some("send-code") => send_verification_code(args.collect()),
-        Some("logout") => product_command("mahayana.auth.logout", json!({})),
-        Some("auth") => product_command("mahayana.auth.status", json!({})),
-        Some("status") => with_runtime(codex_executable_path, |runtime| {
+fn run(codex_executable_path: Option<&Path>, cli: Cli) -> Result<(), String> {
+    match cli.command {
+        Some(CliCommand::Login { args }) => login(args),
+        Some(CliCommand::Register { args }) => register(args),
+        Some(CliCommand::SendCode { email }) => send_verification_code(vec![email]),
+        Some(CliCommand::Logout) => product_command("mahayana.auth.logout", json!({})),
+        Some(CliCommand::Auth) => product_command("mahayana.auth.status", json!({})),
+        Some(CliCommand::Usage) => model_usage_command(),
+        Some(CliCommand::Status) => with_runtime(codex_executable_path, |runtime| {
             print_json(&runtime.execute(json!({"@type": "mahayana.runtime.status"}))?)
         }),
-        Some("contacts") | Some("list") => with_runtime(codex_executable_path, |runtime| {
+        Some(CliCommand::Contacts) => with_runtime(codex_executable_path, |runtime| {
             let response = runtime.execute(json!({"@type": "mahayana.conversation.list"}))?;
             print_conversations(&response)
         }),
-        Some("history") => {
-            let conversation_id = args
-                .next()
-                .ok_or_else(|| "用法：mahayana history <conversation-id>".to_string())?;
+        Some(CliCommand::History { conversation_id }) => {
             with_runtime(codex_executable_path, |runtime| {
                 let response = runtime.execute(json!({
                     "@type": "mahayana.conversation.history",
@@ -62,103 +226,279 @@ fn run(codex_executable_path: Option<&Path>) -> Result<(), String> {
                 print_history(&response)
             })
         }
-        Some("send") => {
-            let conversation_id = args
-                .next()
-                .ok_or_else(|| "用法：mahayana send <conversation-id> <message>".to_string())?;
-            let text = args.collect::<Vec<_>>().join(" ");
-            if text.is_empty() {
-                return Err("消息不能为空".into());
-            }
+        Some(CliCommand::Send {
+            conversation_id,
+            text,
+        }) => {
+            let text = text.join(" ");
             with_runtime(codex_executable_path, |runtime| {
                 send_and_stream(runtime, &conversation_id, &text)
             })
         }
-        Some("chat") => {
-            let conversation_id = args.next();
+        Some(CliCommand::Chat { conversation_id }) => {
             with_runtime(codex_executable_path, |runtime| {
                 interactive_chat(runtime, conversation_id)
             })
         }
-        Some("miniapp") => miniapp_command(codex_executable_path, args.collect()),
-        Some("help") | Some("--help") | Some("-h") => {
-            usage();
-            Ok(())
-        }
-        Some(other) => Err(format!("未知命令：{other}。运行 mahayana help 查看帮助。")),
+        Some(CliCommand::Miniapp { args }) => miniapp_command(codex_executable_path, args),
+        Some(CliCommand::Marketplace { command }) => marketplace_command(command),
+        Some(CliCommand::Plugin { command }) => plugin_command(codex_executable_path, command),
+        Some(CliCommand::Wallet { command }) => wallet_command(command),
+        Some(CliCommand::Purchases { command }) => purchases_command(command),
         None => with_runtime(codex_executable_path, |runtime| {
             interactive_chat(runtime, None)
         }),
     }
 }
 
-fn usage() {
-    println!(
-        "大乘 CLI\n\n\
-         mahayana login [alipay]                支付宝登录\n\
-         mahayana login password <用户名>       官方账号登录（安全读取密码）\n\
-         mahayana send-code <邮箱>              发送注册验证码\n\
-         mahayana register <用户名> <邮箱> <码>  注册官方账号（安全读取密码）\n\
-         mahayana contacts                      查看 AI、Telegram、好友和小程序\n\
-         mahayana chat [conversation-id]        进入联系人式会话\n\
-         mahayana send <conversation-id> <文本> 发送并流式等待回复\n\
-         mahayana history <conversation-id>     查看历史\n\
-         mahayana miniapp generate <目录> <需求> 机器人之父在本地生成小程序\n\
-         mahayana miniapp inspect <目录>         检查小程序与权限\n\
-         mahayana miniapp publish <目录>         发布到个人沙箱（无需登录）\n\
-         mahayana miniapp registry              查看可用小程序\n\
-         mahayana miniapp execute '<JSON>'      调用内置 Rust 小程序 Runtime\n\
-         mahayana status                        查看本地 Runtime 状态\n\
-         mahayana logout                        退出软件账号"
-    );
+fn marketplace_command(command: MarketplaceCommand) -> Result<(), String> {
+    let client = MahayanaProductClient::default();
+    let response = match command {
+        MarketplaceCommand::Browse => client.marketplace_browse(None),
+        MarketplaceCommand::Search { query } => client.marketplace_browse(Some(&query)),
+    }
+    .map_err(|error| error.to_string())?;
+    print_json(&response)
+}
+
+fn model_usage_command() -> Result<(), String> {
+    let usage = MahayanaProductClient::default()
+        .model_usage()
+        .map_err(|error| error.to_string())?;
+    let response = serde_json::to_value(usage).map_err(|error| error.to_string())?;
+    print_json(&response)
+}
+
+fn plugin_command(
+    codex_executable_path: Option<&Path>,
+    command: PluginCommand,
+) -> Result<(), String> {
+    match command {
+        PluginCommand::Init {
+            name,
+            repository,
+            title,
+        } => print_json(&plugin_dev::init_repository(
+            &repository,
+            &name,
+            title.as_deref(),
+        )?),
+        PluginCommand::List {
+            marketplace,
+            available,
+            json,
+        } => {
+            let mut args = vec!["list".to_string()];
+            if let Some(marketplace) = marketplace {
+                args.extend(["--marketplace".into(), marketplace]);
+            }
+            if json || available {
+                args.push("--json".into());
+            }
+            if available {
+                args.push("--available".into());
+            }
+            run_codex_plugin(args)
+        }
+        PluginCommand::Info { plugin_id } => {
+            let response = MahayanaProductClient::default()
+                .marketplace_browse(Some(&plugin_id))
+                .map_err(|error| error.to_string())?;
+            print_json(&response)
+        }
+        PluginCommand::Install {
+            plugin,
+            marketplace,
+            json,
+            allow_local,
+        } => {
+            if marketplace.is_none() && plugin_dev::looks_like_github_source(&plugin) {
+                let remote = plugin_dev::validate_github_source(&plugin)?;
+                if remote.has_local_runtimes && !allow_local {
+                    return Err(
+                        "仓库包含本地 CLI/stdio runtime；请审查源码后使用 --allow-local 单独授权"
+                            .into(),
+                    );
+                }
+                let mut marketplace_args =
+                    vec!["marketplace".to_string(), "add".to_string(), plugin.clone()];
+                if json {
+                    marketplace_args.push("--json".into());
+                }
+                run_codex_plugin(marketplace_args)?;
+                for plugin_name in remote.plugins {
+                    let mut args = vec![
+                        "add".to_string(),
+                        plugin_name,
+                        "--marketplace".into(),
+                        remote.marketplace.clone(),
+                    ];
+                    if json {
+                        args.push("--json".into());
+                    }
+                    run_codex_plugin(args)?;
+                }
+                return Ok(());
+            }
+            let mut args = vec!["add".to_string(), plugin];
+            if let Some(marketplace) = marketplace {
+                args.extend(["--marketplace".into(), marketplace]);
+            }
+            if json {
+                args.push("--json".into());
+            }
+            run_codex_plugin(args)
+        }
+        PluginCommand::Update {
+            plugin,
+            marketplace,
+            json,
+        } => {
+            let mut args = vec!["add".to_string(), plugin];
+            if let Some(marketplace) = marketplace {
+                args.extend(["--marketplace".into(), marketplace]);
+            }
+            if json {
+                args.push("--json".into());
+            }
+            run_codex_plugin(args)
+        }
+        PluginCommand::Uninstall {
+            plugin,
+            marketplace,
+            json,
+        } => {
+            let mut args = vec!["remove".to_string(), plugin];
+            if let Some(marketplace) = marketplace {
+                args.extend(["--marketplace".into(), marketplace]);
+            }
+            if json {
+                args.push("--json".into());
+            }
+            run_codex_plugin(args)
+        }
+        PluginCommand::Open { plugin_id } => with_runtime(codex_executable_path, |runtime| {
+            interactive_chat(runtime, Some(format!("miniapp:{plugin_id}")))
+        }),
+        PluginCommand::Run {
+            plugin_id,
+            command,
+            json,
+        } => {
+            let arguments = json
+                .as_deref()
+                .map(serde_json::from_str::<Value>)
+                .transpose()
+                .map_err(|error| format!("--json 必须是合法 JSON：{error}"))?
+                .unwrap_or_else(|| json!({}));
+            if !arguments.is_object() {
+                return Err("--json 必须是 MCP Tool 参数对象".into());
+            }
+            let message = format!("/{command} {arguments}");
+            with_runtime(codex_executable_path, |runtime| {
+                send_and_stream(runtime, &format!("miniapp:{plugin_id}"), &message)
+            })
+        }
+        PluginCommand::Validate { path } => print_json(&plugin_dev::validate_path(&path)?),
+        PluginCommand::Pack { path, output } => {
+            LocalPlugin::load(&path).map_err(|error| error.to_string())?;
+            let archive = pack_plugin_bundle_tar_gz(&path, 50 * 1024 * 1024)
+                .map_err(|error| error.to_string())?;
+            let output = output.unwrap_or_else(|| path.with_extension("tar.gz"));
+            fs::write(&output, archive).map_err(|error| error.to_string())?;
+            println!("{}", output.display());
+            Ok(())
+        }
+        PluginCommand::Publish {
+            path,
+            plugin_id,
+            version,
+        } => {
+            LocalPlugin::load(&path).map_err(|error| error.to_string())?;
+            let archive = pack_plugin_bundle_tar_gz(&path, 50 * 1024 * 1024)
+                .map_err(|error| error.to_string())?;
+            let response = MahayanaProductClient::default()
+                .publish_plugin(&plugin_id, &version, archive)
+                .map_err(|error| error.to_string())?;
+            print_json(&response)
+        }
+    }
+}
+
+fn run_codex_plugin(args: Vec<String>) -> Result<(), String> {
+    let cli = PluginCli::try_parse_from(std::iter::once("codex plugin".to_string()).chain(args))
+        .map_err(|error| error.to_string())?;
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| error.to_string())?;
+    runtime
+        .block_on(async move {
+            let overrides = cli
+                .config_overrides
+                .parse_overrides()
+                .map_err(anyhow::Error::msg)?;
+            match cli.subcommand {
+                PluginSubcommand::Add(args) => {
+                    codex_cli::plugin_cmd::run_plugin_add(overrides, args).await
+                }
+                PluginSubcommand::List(args) => {
+                    codex_cli::plugin_cmd::run_plugin_list(overrides, args).await
+                }
+                PluginSubcommand::Marketplace(marketplace) => marketplace.run().await,
+                PluginSubcommand::Remove(args) => {
+                    codex_cli::plugin_cmd::run_plugin_remove(overrides, args).await
+                }
+            }
+        })
+        .map_err(|error| error.to_string())
+}
+
+fn wallet_command(command: WalletCommand) -> Result<(), String> {
+    let client = MahayanaProductClient::default();
+    let response = match command {
+        WalletCommand::Balance => {
+            serde_json::to_value(client.wallet_balance().map_err(|error| error.to_string())?)
+        }
+        WalletCommand::History => serde_json::to_value(
+            client
+                .wallet_history(None)
+                .map_err(|error| error.to_string())?,
+        ),
+        WalletCommand::TopUp {
+            sku,
+            idempotency_key,
+        } => {
+            let idempotency_key =
+                idempotency_key.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+            Ok(client
+                .wallet_top_up(&sku, &idempotency_key)
+                .map_err(|error| error.to_string())?)
+        }
+    }
+    .map_err(|error| error.to_string())?;
+    print_json(&response)
+}
+
+fn purchases_command(command: PurchasesCommand) -> Result<(), String> {
+    let client = MahayanaProductClient::default();
+    let response = match command {
+        PurchasesCommand::List => {
+            serde_json::to_value(client.purchases(None).map_err(|error| error.to_string())?)
+        }
+        PurchasesCommand::Restore => serde_json::to_value(
+            client
+                .restore_purchases()
+                .map_err(|error| error.to_string())?,
+        ),
+    }
+    .map_err(|error| error.to_string())?;
+    print_json(&response)
 }
 
 fn miniapp_command(codex_executable_path: Option<&Path>, args: Vec<String>) -> Result<(), String> {
     match args.first().map(String::as_str) {
-        Some("generate") => {
-            let workspace = args
-                .get(1)
-                .map(PathBuf::from)
-                .ok_or_else(|| "用法：mahayana miniapp generate <目录> <需求>".to_string())?;
-            let prompt = args.get(2..).unwrap_or_default().join(" ");
-            if prompt.trim().is_empty() {
-                return Err("小程序需求不能为空".into());
-            }
-            generate_miniapp(codex_executable_path, &workspace, &prompt)
-        }
-        Some("inspect") => {
-            let workspace = args
-                .get(1)
-                .map(PathBuf::from)
-                .ok_or_else(|| "用法：mahayana miniapp inspect <目录>".to_string())?;
-            print_json(&inspect_miniapp(&workspace)?)
-        }
-        Some("publish") => {
-            let workspace = args.get(1).map(PathBuf::from).ok_or_else(|| {
-                "用法：mahayana miniapp publish <目录> [--submit-review]".to_string()
-            })?;
-            publish_miniapp(&workspace, args.iter().any(|arg| arg == "--submit-review"))
-        }
         Some("registry") => product_command("mahayana.miniapps.registry", json!({})),
-        Some("execute") => {
-            let source = args
-                .get(1)
-                .ok_or_else(|| "用法：mahayana miniapp execute '<JSON>'".to_string())?;
-            let request: Value = serde_json::from_str(source)
-                .map_err(|error| format!("小程序 Runtime JSON 无效：{error}"))?;
-            if !request.is_object() {
-                return Err("小程序 Runtime 请求必须是 JSON 对象".into());
-            }
-            let response = fabushi_miniapp_runtime::execute_json(&request.to_string())?;
-            let response: Value =
-                serde_json::from_str(&response).map_err(|error| error.to_string())?;
-            print_json(&response)
-        }
-        Some("spec") => {
-            let spec: Value = serde_json::from_str(&fabushi_miniapp_core::host_api_spec_json())
-                .map_err(|error| error.to_string())?;
-            print_json(&spec)
-        }
         Some("chat") => {
             let miniapp_id = args
                 .get(1)
@@ -171,246 +511,8 @@ fn miniapp_command(codex_executable_path: Option<&Path>, args: Vec<String>) -> R
                 send_and_stream(runtime, &format!("miniapp:{miniapp_id}"), &message)
             })
         }
-        _ => {
-            Err("用法：mahayana miniapp generate|inspect|publish|registry|execute|spec|chat".into())
-        }
+        _ => Err("用法：mahayana miniapp registry|chat".into()),
     }
-}
-
-fn generate_miniapp(
-    codex_executable_path: Option<&Path>,
-    workspace: &Path,
-    user_prompt: &str,
-) -> Result<(), String> {
-    fs::create_dir_all(workspace).map_err(|error| error.to_string())?;
-    let workspace = fs::canonicalize(workspace).map_err(|error| error.to_string())?;
-    let instructions_path = workspace.join("AGENTS.md");
-    if !instructions_path.exists() {
-        fs::write(
-            &instructions_path,
-            concat!(
-                "# 大乘小程序工作区\n\n",
-                "机器人之父在此目录开发一个可直接运行的小程序。\n",
-                "入口必须是完整、自包含的 index.html，CSS 与 JavaScript 必须内联。\n",
-                "禁止外链脚本、eval、Authorization token、桌面桥 token 和 OpenClaw token。\n",
-                "宿主能力只能通过 window.FabushiMiniApp.invoke(method, params) 调用。\n",
-            ),
-        )
-        .map_err(|error| error.to_string())?;
-    }
-
-    let runtime = RuntimeHandle::create_in_workspace(codex_executable_path, &workspace)?;
-    let agent_prompt = format!(
-        "请作为机器人之父完成以下小程序需求：\n{user_prompt}\n\n\
-         必须直接使用 Codex 文件工具在当前工作区创建或修改 index.html；\
-         它必须是完整、自包含、无需构建的 HTML，CSS 和 JavaScript 全部内联。\
-         禁止外链脚本、eval 和任何 token。需要宿主能力时只调用 \
-         window.FabushiMiniApp.invoke(method, params)。完成后检查文件，最终只简要报告。"
-    );
-    let mut assistant = send_and_collect(
-        &runtime,
-        "miniapp:official.bot-father",
-        &agent_prompt,
-        false,
-    )?;
-
-    let entry_path = workspace.join("index.html");
-    if !entry_path.exists() {
-        if extract_html(&assistant).is_none() {
-            assistant = send_and_collect(
-                &runtime,
-                "miniapp:official.bot-father",
-                &format!(
-                    "刚才的源码被截断。请重新实现需求“{user_prompt}”，只返回一行极简 HTML，\
-                     总长度必须少于 1800 个字符。必须从 <!DOCTYPE html> 开始并以 </html> 结束；\
-                     只保留完成功能必需的 HTML、少量内联 CSS 和 JavaScript，不要注释、\
-                     不要 Markdown 围栏、不要解释、不要调用任何非必需宿主能力。"
-                ),
-                false,
-            )?;
-        }
-        if let Some(html) = extract_html(&assistant) {
-            fs::write(&entry_path, html).map_err(|error| error.to_string())?;
-        }
-    }
-    if !entry_path.exists() {
-        return Err("机器人之父没有在工作区生成 index.html".into());
-    }
-
-    let manifest_path = workspace.join("manifest.json");
-    if !manifest_path.exists() {
-        let title = title_from_prompt(user_prompt);
-        write_json_file(
-            &manifest_path,
-            &json!({
-                "schemaVersion": 1,
-                "miniAppId": format!("local.{}", now_millis()),
-                "title": title,
-                "subtitle": "机器人之父生成的个人沙箱小程序",
-                "version": "0.0.1",
-                "permissions": ["app.context", "bot.chat"],
-                "entry": "index.html",
-                "prompt": user_prompt,
-            }),
-        )?;
-    }
-    let inspection = inspect_miniapp(&workspace)?;
-    if inspection.get("passed").and_then(Value::as_bool) != Some(true) {
-        print_json(&inspection)?;
-        return Err("小程序生成完成，但本地安全检查未通过".into());
-    }
-    print_json(&json!({
-        "@type": "mahayana.miniapp.generated",
-        "workspace": workspace,
-        "entry": entry_path,
-        "manifest": manifest_path,
-        "inspection": inspection,
-    }))
-}
-
-fn inspect_miniapp(workspace: &Path) -> Result<Value, String> {
-    let workspace = fs::canonicalize(workspace).map_err(|error| error.to_string())?;
-    let entry_path = workspace.join("index.html");
-    let manifest_path = workspace.join("manifest.json");
-    let mut errors = Vec::new();
-    let mut warnings = Vec::new();
-    let html = match fs::read_to_string(&entry_path) {
-        Ok(html) if html.len() <= 2 * 1024 * 1024 => html,
-        Ok(_) => {
-            errors.push("index.html 超过 2 MiB".to_string());
-            String::new()
-        }
-        Err(error) => {
-            errors.push(format!("无法读取 index.html：{error}"));
-            String::new()
-        }
-    };
-    let lower = html.to_ascii_lowercase();
-    if !lower.contains("<html") || !lower.contains("<body") || !lower.contains("</html>") {
-        errors.push("index.html 不是完整 HTML 文档".to_string());
-    }
-    for (needle, message) in [
-        ("<script src", "禁止加载外部脚本"),
-        ("eval(", "禁止使用 eval"),
-        ("authorization:", "禁止在小程序中内嵌 Authorization"),
-        ("bearer ", "禁止在小程序中内嵌 Bearer token"),
-        ("desktop bridge token", "禁止在小程序中内嵌桌面桥 token"),
-        ("openclaw token", "禁止在小程序中内嵌 OpenClaw token"),
-    ] {
-        if lower.contains(needle) {
-            errors.push(message.to_string());
-        }
-    }
-
-    let manifest = match fs::read_to_string(&manifest_path) {
-        Ok(source) => serde_json::from_str::<Value>(&source)
-            .map_err(|error| format!("manifest.json 无效：{error}"))?,
-        Err(error) => {
-            errors.push(format!("无法读取 manifest.json：{error}"));
-            json!({})
-        }
-    };
-    let permissions = manifest
-        .get("permissions")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let known_permissions = fabushi_miniapp_core::capabilities()
-        .into_iter()
-        .map(|capability| capability.id)
-        .collect::<Vec<_>>();
-    for permission in &permissions {
-        let Some(permission) = permission.as_str() else {
-            errors.push("manifest.permissions 必须都是字符串".to_string());
-            continue;
-        };
-        if !known_permissions.contains(&permission) {
-            warnings.push(format!("宿主没有名为 {permission} 的能力"));
-        }
-    }
-    Ok(json!({
-        "@type": "mahayana.miniapp.inspection",
-        "passed": errors.is_empty(),
-        "workspace": workspace,
-        "entry": entry_path,
-        "manifest": manifest,
-        "hostApiVersion": fabushi_miniapp_core::HOST_API_VERSION,
-        "hostSdkVersion": fabushi_miniapp_core::HOST_SDK_VERSION,
-        "errors": errors,
-        "warnings": warnings,
-    }))
-}
-
-fn publish_miniapp(workspace: &Path, submit_review: bool) -> Result<(), String> {
-    let inspection = inspect_miniapp(workspace)?;
-    if inspection.get("passed").and_then(Value::as_bool) != Some(true) {
-        print_json(&inspection)?;
-        return Err("拒绝发布：本地安全检查未通过".into());
-    }
-    let workspace = fs::canonicalize(workspace).map_err(|error| error.to_string())?;
-    let manifest_path = workspace.join("manifest.json");
-    let mut manifest: Value = serde_json::from_str(
-        &fs::read_to_string(&manifest_path).map_err(|error| error.to_string())?,
-    )
-    .map_err(|error| error.to_string())?;
-    let source_html =
-        fs::read_to_string(workspace.join("index.html")).map_err(|error| error.to_string())?;
-    let request = json!({
-        "title": manifest.get("title").and_then(Value::as_str).unwrap_or("个人小程序"),
-        "subtitle": manifest.get("subtitle").and_then(Value::as_str),
-        "prompt": manifest.get("prompt").and_then(Value::as_str),
-        "version": manifest.get("version").and_then(Value::as_str).unwrap_or("0.0.1"),
-        "permissions": manifest.get("permissions").cloned().unwrap_or_else(|| json!([])),
-        "sourceHtml": source_html,
-        "submitReview": submit_review,
-    });
-    let response = MahayanaProductClient::default()
-        .execute("mahayana.miniapp.sandbox.publish", &request)
-        .map_err(|error| error.to_string())?;
-    if let Some(object) = manifest.as_object_mut() {
-        if let Some(miniapp_id) = response.get("miniAppId").cloned() {
-            object.insert("miniAppId".to_string(), miniapp_id);
-        }
-        object.insert("published".to_string(), redact_secrets(&response));
-    }
-    write_json_file(&manifest_path, &manifest)?;
-    print_json(&redact_secrets(&response))
-}
-
-fn extract_html(source: &str) -> Option<&str> {
-    let lower = source.to_ascii_lowercase();
-    let start = lower
-        .find("<!doctype html")
-        .or_else(|| lower.find("<html"))?;
-    let end = lower[start..].find("</html>")? + start + "</html>".len();
-    source.get(start..end)
-}
-
-fn title_from_prompt(prompt: &str) -> String {
-    let title = prompt
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .chars()
-        .take(18)
-        .collect::<String>();
-    if title.is_empty() {
-        "个人小程序".to_string()
-    } else {
-        title
-    }
-}
-
-fn write_json_file(path: &Path, value: &Value) -> Result<(), String> {
-    let source = serde_json::to_vec_pretty(value).map_err(|error| error.to_string())?;
-    fs::write(path, source).map_err(|error| error.to_string())
-}
-
-fn now_millis() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis()
 }
 
 fn login(args: Vec<String>) -> Result<(), String> {
@@ -558,18 +660,7 @@ impl RuntimeHandle {
     fn create(codex_executable_path: Option<&Path>) -> Result<Self, String> {
         Self::create_with_config(json!({
             "codexExecutablePath": codex_executable_path,
-        }))
-    }
-
-    fn create_in_workspace(
-        codex_executable_path: Option<&Path>,
-        workspace: &Path,
-    ) -> Result<Self, String> {
-        Self::create_with_config(json!({
-            "codexExecutablePath": codex_executable_path,
-            "cwd": workspace,
-            "workspaceRoots": [workspace],
-            "dataDir": mahayana_product::default_mahayana_home(),
+            "hostPlatform": "cli",
         }))
     }
 
@@ -612,6 +703,13 @@ impl RuntimeHandle {
             unsafe { take_json(mahayana_runtime_resolve_approval(self.0, request.as_ptr())) }?;
         unwrap_ffi(response).map(|_| ())
     }
+
+    fn interrupt(&self, operation_id: &str) -> Result<(), String> {
+        let request = CString::new(json!({"operationId": operation_id}).to_string())
+            .map_err(|error| error.to_string())?;
+        let response = unsafe { take_json(mahayana_runtime_interrupt(self.0, request.as_ptr())) }?;
+        unwrap_ffi(response).map(|_| ())
+    }
 }
 
 impl Drop for RuntimeHandle {
@@ -624,50 +722,7 @@ impl Drop for RuntimeHandle {
 }
 
 fn interactive_chat(runtime: &RuntimeHandle, selected: Option<String>) -> Result<(), String> {
-    let response = runtime.execute(json!({"@type": "mahayana.conversation.list"}))?;
-    let conversations = response
-        .get("data")
-        .and_then(Value::as_array)
-        .ok_or_else(|| "Runtime 没有返回联系人列表".to_string())?;
-    let conversation_id = if let Some(selected) = selected {
-        selected
-    } else {
-        print_conversation_rows(conversations);
-        print!("请选择联系人编号：");
-        io::stdout().flush().map_err(|error| error.to_string())?;
-        let selection = read_line()?;
-        let index = selection
-            .trim()
-            .parse::<usize>()
-            .map_err(|_| "联系人编号无效".to_string())?;
-        conversations
-            .get(index.saturating_sub(1))
-            .and_then(|value| value.get("id"))
-            .and_then(Value::as_str)
-            .ok_or_else(|| "联系人编号不存在".to_string())?
-            .to_string()
-    };
-    println!("已进入 {conversation_id}。输入 /contacts 切换，/history 查看历史，/quit 退出。");
-    loop {
-        print!("> ");
-        io::stdout().flush().map_err(|error| error.to_string())?;
-        let text = read_line()?;
-        let text = text.trim();
-        match text {
-            "" => continue,
-            "/quit" | "/exit" => return Ok(()),
-            "/contacts" => return interactive_chat(runtime, None),
-            "/history" => {
-                let history = runtime.execute(json!({
-                    "@type": "mahayana.conversation.history",
-                    "conversationId": conversation_id,
-                    "limit": 100,
-                }))?;
-                print_history(&history)?;
-            }
-            _ => send_and_stream(runtime, &conversation_id, text)?,
-        }
-    }
+    chat_tui::run(runtime, selected)
 }
 
 fn send_and_stream(
@@ -694,6 +749,7 @@ fn send_and_collect(
         .and_then(Value::as_str)
         .ok_or_else(|| "Runtime 没有返回操作编号".to_string())?;
     let mut assistant = String::new();
+    let mut usage_summary = None;
     loop {
         let Some(event) = runtime.receive(30_000)? else {
             continue;
@@ -735,9 +791,17 @@ fn send_and_collect(
             {
                 handle_approval(runtime, &event)?;
             }
+            Some("mahayana.model.usage.updated")
+                if event.get("operationId").and_then(Value::as_str) == Some(operation_id) =>
+            {
+                usage_summary = format_usage_summary(&event);
+            }
             Some("mahayana.operation.completed")
                 if event.get("operationId").and_then(Value::as_str) == Some(operation_id) =>
             {
+                if print_stream && let Some(usage) = usage_summary {
+                    eprintln!("{usage}");
+                }
                 return Ok(assistant);
             }
             Some("mahayana.operation.failed")
@@ -752,6 +816,31 @@ fn send_and_collect(
             _ => {}
         }
     }
+}
+
+fn format_usage_summary(event: &Value) -> Option<String> {
+    let usage = event.get("usage")?;
+    let last = usage.get("last")?;
+    let total = last.get("totalTokens").and_then(Value::as_i64)?;
+    let input = last
+        .get("inputTokens")
+        .and_then(Value::as_i64)
+        .unwrap_or_default();
+    let cached = last
+        .get("cachedInputTokens")
+        .and_then(Value::as_i64)
+        .unwrap_or_default();
+    let output = last
+        .get("outputTokens")
+        .and_then(Value::as_i64)
+        .unwrap_or_default();
+    let reasoning = last
+        .get("reasoningOutputTokens")
+        .and_then(Value::as_i64)
+        .unwrap_or_default();
+    Some(format!(
+        "本次模型用量：{total} tokens（输入 {input}，缓存输入 {cached}，输出 {output}，推理 {reasoning}）"
+    ))
 }
 
 fn handle_approval(runtime: &RuntimeHandle, event: &Value) -> Result<(), String> {
@@ -873,7 +962,3 @@ unsafe fn take_json(pointer: *mut c_char) -> Result<Value, String> {
     unsafe { mahayana_runtime_free_string(pointer) };
     serde_json::from_str(&source).map_err(|error| error.to_string())
 }
-
-#[cfg(test)]
-#[path = "main_tests.rs"]
-mod tests;

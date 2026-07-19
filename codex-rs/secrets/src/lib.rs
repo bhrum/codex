@@ -21,6 +21,7 @@ pub use local::LocalSecretsNamespace;
 pub use sanitizer::redact_secrets;
 
 const KEYRING_SERVICE: &str = "codex";
+const MAHAYANA_KEYRING_SERVICE: &str = "mahayana-cli";
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SecretName(String);
@@ -123,6 +124,26 @@ impl SecretsManager {
         Self { backend }
     }
 
+    /// Creates a local encrypted secrets manager for a dedicated host namespace.
+    ///
+    /// The encrypted file remains rooted in the supplied application data
+    /// directory while its encryption key is kept in the OS keyring. This is
+    /// the default constructor for first-party hosts that reuse Codex secrets
+    /// storage without sharing Codex authentication records.
+    pub fn new_with_namespace(
+        codex_home: PathBuf,
+        backend_kind: SecretsBackendKind,
+        namespace: LocalSecretsNamespace,
+    ) -> Self {
+        let keyring_store: Arc<dyn KeyringStore> = Arc::new(DefaultKeyringStore);
+        Self::new_with_keyring_store_and_namespace(
+            codex_home,
+            backend_kind,
+            keyring_store,
+            namespace,
+        )
+    }
+
     pub fn new_with_keyring_store_and_namespace(
         codex_home: PathBuf,
         backend_kind: SecretsBackendKind,
@@ -194,8 +215,13 @@ pub fn compute_keyring_account(codex_home: &Path) -> String {
     format!("secrets|{short}")
 }
 
-pub(crate) fn keyring_service() -> &'static str {
-    KEYRING_SERVICE
+pub(crate) fn keyring_service(namespace: LocalSecretsNamespace) -> &'static str {
+    match namespace {
+        LocalSecretsNamespace::MahayanaAuth => MAHAYANA_KEYRING_SERVICE,
+        LocalSecretsNamespace::ManagedSecrets
+        | LocalSecretsNamespace::CodexAuth
+        | LocalSecretsNamespace::McpOAuth => KEYRING_SERVICE,
+    }
 }
 
 #[cfg(test)]

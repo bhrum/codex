@@ -8,15 +8,18 @@ members = [
     "mahayana-core",
     "mahayana-ffi",
     "mahayana-model",
+    "mahayana-miniapp-bridge",
+    "mahayana-miniapp-protocol",
     "mahayana-miniapp",
+    "mahayana-platform-core",
+    "mahayana-platform-worker",
+    "mahayana-plugin-host",
     "mahayana-product",
     "mahayana-runtime",
     "mahayana-social",
     "mahayana-telegram",
     "mahayana-tool-host",
     "mahayana-web",
-    "providers/fabushi-miniapp-runtime",
-    "providers/miniapp-core",
     "providers/telegram-core",
     "providers/telegram-media",
     "providers/telegram-network",
@@ -24,6 +27,7 @@ members = [
     "providers/telegram-runtime",
     "providers/telegram-storage",
     "providers/telegram-wasm",
+    "providers/official-miniapps",
 ]
 resolver = "2"
 
@@ -33,39 +37,57 @@ edition = "2024"
 license = "Apache-2.0"
 
 [workspace.dependencies]
+anyhow = "1"
 async-trait = "0.1"
 codex-app-server-client = { path = "../codex-rs/app-server-client" }
 codex-app-server-protocol = { path = "../codex-rs/app-server-protocol" }
 codex-arg0 = { path = "../codex-rs/arg0" }
 codex-config = { path = "../codex-rs/config" }
+codex-cli = { path = "../codex-rs/cli" }
 codex-core = { path = "../codex-rs/core" }
+codex-core-plugins = { path = "../codex-rs/core-plugins" }
 codex-exec-server = { path = "../codex-rs/exec-server" }
 codex-feedback = { path = "../codex-rs/feedback" }
+codex-login = { path = "../codex-rs/login" }
 codex-model-provider-info = { path = "../codex-rs/model-provider-info" }
 codex-protocol = { path = "../codex-rs/protocol" }
+codex-secrets = { path = "../codex-rs/secrets" }
+codex-tui = { path = "../codex-rs/tui" }
 codex-utils-absolute-path = { path = "../codex-rs/utils/absolute-path" }
 crossbeam-channel = "0.5"
 chrono = { version = "0.4", default-features = false, features = ["std"] }
+crossterm = "0.28.1"
 mahayana-agent = { path = "mahayana-agent" }
 mahayana-agent-responses = { path = "mahayana-agent-responses" }
 mahayana-conversation = { path = "mahayana-conversation" }
 mahayana-core = { path = "mahayana-core" }
 mahayana-model = { path = "mahayana-model" }
+mahayana-miniapp-bridge = { path = "mahayana-miniapp-bridge" }
+mahayana-miniapp-protocol = { path = "mahayana-miniapp-protocol" }
 mahayana-miniapp = { path = "mahayana-miniapp" }
+mahayana-platform-core = { path = "mahayana-platform-core" }
+mahayana-plugin-host = { path = "mahayana-plugin-host" }
 mahayana-runtime = { path = "mahayana-runtime" }
 mahayana-social = { path = "mahayana-social" }
 mahayana-telegram = { path = "mahayana-telegram" }
 mahayana-tool-host = { path = "mahayana-tool-host" }
+fabushi-official-miniapps = { path = "providers/official-miniapps" }
 once_cell = "1"
 rpassword = "7"
+ratatui = "0.29.0"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "multipart", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+serde_yaml = "0.9"
+sha2 = "0.10"
 thiserror = "2"
 toml = "0.9.5"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
 ureq = { version = "2.12", features = ["json"] }
 url = "2"
 uuid = { version = "1", features = ["js", "v4"] }
+# The patched Ratatui revision used by Codex pins this exact release.
+unicode-width = "=0.2.1"
 wasm-bindgen = "=0.2.126"
 wasm-bindgen-futures = "=0.4.76"
 web-sys = { version = "=0.3.103", features = [
@@ -75,6 +97,7 @@ web-sys = { version = "=0.3.103", features = [
     "RequestMode",
     "Response",
     "Window",
+    "WorkerGlobalScope",
 ] }
 
 [profile.dev]

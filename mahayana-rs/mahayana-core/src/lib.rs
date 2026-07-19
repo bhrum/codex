@@ -187,12 +187,47 @@ pub struct Message {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginCommandDescriptor {
+    pub plugin_id: String,
+    pub command: String,
+    pub tool: String,
+    pub input_schema: Value,
+    #[serde(default)]
+    pub annotations: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "@type")]
 pub enum RuntimeCommand {
     #[serde(rename = "mahayana.runtime.status")]
     Status,
     #[serde(rename = "mahayana.conversation.list")]
     ListConversations,
+    #[serde(rename = "mahayana.plugin.commands")]
+    ListPluginCommands {
+        #[serde(rename = "pluginId")]
+        plugin_id: Option<String>,
+    },
+    #[serde(rename = "mahayana.plugin.ui")]
+    PluginUi {
+        #[serde(rename = "pluginId")]
+        plugin_id: String,
+    },
+    #[serde(rename = "mahayana.plugin.approveLocal")]
+    ApproveLocalPluginTool {
+        #[serde(rename = "pluginId")]
+        plugin_id: String,
+        tool: String,
+    },
+    #[serde(rename = "mahayana.plugin.callLocal")]
+    CallLocalPluginTool {
+        #[serde(rename = "pluginId")]
+        plugin_id: String,
+        tool: String,
+        #[serde(default)]
+        arguments: Value,
+    },
     #[serde(rename = "mahayana.conversation.history")]
     ConversationHistory {
         #[serde(rename = "conversationId")]
@@ -238,6 +273,29 @@ pub enum RuntimeResponse {
     Status(RuntimeStatus),
     #[serde(rename = "mahayana.conversation.list")]
     Conversations { data: Vec<Conversation> },
+    #[serde(rename = "mahayana.plugin.commands")]
+    PluginCommands { data: Vec<PluginCommandDescriptor> },
+    #[serde(rename = "mahayana.plugin.ui")]
+    PluginUi {
+        #[serde(rename = "pluginId")]
+        plugin_id: String,
+        html: String,
+    },
+    #[serde(rename = "mahayana.plugin.approvedLocal")]
+    LocalPluginToolApproved {
+        #[serde(rename = "pluginId")]
+        plugin_id: String,
+        tool: String,
+    },
+    #[serde(rename = "mahayana.plugin.localResult")]
+    LocalPluginToolResult {
+        #[serde(rename = "pluginId")]
+        plugin_id: String,
+        tool: String,
+        result: Value,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        progress: Vec<Value>,
+    },
     #[serde(rename = "mahayana.conversation.history")]
     History { data: Vec<Message> },
     #[serde(rename = "mahayana.operation.accepted")]
@@ -271,6 +329,29 @@ pub struct RuntimeStatus {
     pub providers: Vec<String>,
 }
 
+/// Provider-reported model token counts. These values are projected from the
+/// Codex Responses usage event and are never estimated by the Mahayana host.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelTokenUsage {
+    pub total_tokens: i64,
+    pub input_tokens: i64,
+    pub cached_input_tokens: i64,
+    pub output_tokens: i64,
+    pub reasoning_output_tokens: i64,
+}
+
+/// Latest model usage checkpoint for a running operation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelTokenUsageSnapshot {
+    /// Codex supplies the cumulative thread total. Lightweight Responses-only
+    /// runtimes omit it instead of pretending a client-side estimate is authoritative.
+    pub total: Option<ModelTokenUsage>,
+    pub last: ModelTokenUsage,
+    pub model_context_window: Option<i64>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "@type")]
 pub enum RuntimeEvent {
@@ -290,6 +371,12 @@ pub enum RuntimeEvent {
         operation_id: OperationId,
         message: Message,
     },
+    #[serde(rename = "mahayana.model.usage.updated")]
+    ModelUsageUpdated {
+        #[serde(rename = "operationId")]
+        operation_id: OperationId,
+        usage: ModelTokenUsageSnapshot,
+    },
     #[serde(rename = "mahayana.approval.requested")]
     ApprovalRequested {
         #[serde(rename = "operationId")]
@@ -298,6 +385,17 @@ pub enum RuntimeEvent {
         approval_id: ApprovalId,
         title: String,
         details: Value,
+    },
+    #[serde(rename = "mahayana.plugin.progress")]
+    PluginProgress {
+        #[serde(rename = "operationId")]
+        operation_id: OperationId,
+        #[serde(rename = "pluginId")]
+        plugin_id: String,
+        tool: String,
+        progress: u64,
+        total: u64,
+        message: String,
     },
     #[serde(rename = "mahayana.operation.completed")]
     OperationCompleted {

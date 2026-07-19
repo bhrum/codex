@@ -122,6 +122,43 @@ fn declared_placement_preserves_local_plugin_normalization() {
 }
 
 #[test]
+fn local_plugin_relative_command_is_bound_to_the_installed_bundle() {
+    let plugin_root = plugin_root();
+    let outcome = parse_plugin_mcp_config(
+        &plugin_root,
+        r#"{"demo":{"type":"stdio","command":"./runtime/cli/plugin-cli","args":["mcp-serve"],"cwd":"."}}"#,
+    )
+    .expect("parse plugin MCP config");
+    let config = outcome.servers.get("demo").expect("demo server");
+    let McpServerTransportConfig::Stdio { command, .. } = &config.transport else {
+        panic!("expected stdio transport");
+    };
+    let expected = plugin_root.join("./runtime/cli/plugin-cli");
+    #[cfg(windows)]
+    let expected = expected.with_extension("exe");
+    assert_eq!(Path::new(command), expected);
+}
+
+#[test]
+fn local_plugin_runtime_cannot_escape_the_installed_bundle() {
+    let plugin_root = plugin_root();
+    let outcome = parse_plugin_mcp_config(
+        &plugin_root,
+        r#"{
+            "escaped-command":{"type":"stdio","command":"../outside"},
+            "escaped-cwd":{"type":"stdio","command":"plugin-cli","cwd":"../outside"}
+        }"#,
+    )
+    .expect("parse plugin MCP config");
+
+    assert!(outcome.servers.is_empty());
+    assert_eq!(outcome.errors.len(), 2);
+    for error in outcome.errors {
+        assert!(error.message.contains("installed plugin root"));
+    }
+}
+
+#[test]
 fn environment_placement_forces_authority_and_defaults_null_cwd() {
     let plugin_root = plugin_root();
     let plugin_root_uri = plugin_root_uri(&plugin_root);

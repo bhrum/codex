@@ -7,6 +7,7 @@ use mahayana_core::Conversation;
 use mahayana_core::ConversationId;
 use mahayana_core::Message;
 use mahayana_core::OperationId;
+use mahayana_core::PluginCommandDescriptor;
 use mahayana_core::RuntimeEvent;
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -42,6 +43,13 @@ pub trait ConversationProvider: Send + Sync {
     fn key(&self) -> &'static str;
 
     async fn list_conversations(&self) -> Result<Vec<Conversation>, ConversationError>;
+
+    async fn list_plugin_commands(
+        &self,
+        _plugin_id: Option<&str>,
+    ) -> Result<Vec<PluginCommandDescriptor>, ConversationError> {
+        Ok(Vec::new())
+    }
 
     async fn history(
         &self,
@@ -140,6 +148,8 @@ pub enum ConversationError {
     OperationNotFound(OperationId),
     #[error("approval was not found: {0}")]
     ApprovalNotFound(ApprovalId),
+    #[error("model usage limit exceeded: {0}")]
+    UsageLimitExceeded(String),
     #[error("provider failed: {0}")]
     Provider(String),
     #[error("event consumer is closed")]

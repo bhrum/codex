@@ -1,0 +1,37 @@
+name = "mahayana-platform"
+main = "build/worker/shim.mjs"
+compatibility_date = "2026-07-18"
+
+[build]
+# wasm-bindgen 0.2.126's abort catch-wrapper requires an externref table that
+# rustc 1.97 does not emit for this Worker. The supported workers-rs fallback
+# keeps abort semantics and uses the standard generated shim.
+command = "worker-build --release --no-panic-recovery"
+
+[vars]
+ACCESS_TOKEN_KEY_ID = "mahayana-account-2026-07"
+PLUGIN_TOKEN_KEY_ID = "mahayana-account-2026-07"
+DEFAULT_AI_TOKEN_LIMIT = "2000000"
+
+[[d1_databases]]
+binding = "PLATFORM_DB"
+database_name = "mahayana-platform"
+database_id = "24e53e28-5abd-4850-ae99-cd5d2bdfffb0"
+migrations_dir = "migrations"
+
+# In production this binding points at the existing fabushi account database.
+# Keep it separate from PLATFORM_DB because account rollout and commerce ledger
+# migrations have independent rollback windows.
+[[d1_databases]]
+binding = "ACCOUNT_DB"
+database_name = "fabushi-db"
+database_id = "7b6318f0-fbc2-42f9-9887-85f878ae76d0"
+migrations_dir = "account-migrations"
+
+[[r2_buckets]]
+binding = "PLUGIN_PACKAGES"
+bucket_name = "mahayana-plugin-packages"
+
+[[queues.producers]]
+binding = "PLATFORM_EVENTS"
+queue = "mahayana-platform-events"

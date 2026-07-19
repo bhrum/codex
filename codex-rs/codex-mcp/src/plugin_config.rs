@@ -7,6 +7,7 @@ use serde::Deserialize;
 use serde_json::Map as JsonMap;
 use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;
+use std::path::Component;
 use std::path::Path;
 use tracing::warn;
 
@@ -118,7 +119,7 @@ fn normalize_plugin_mcp_server(
     value: JsonValue,
     source: PluginMcpSource<'_>,
 ) -> Result<McpServerConfig, String> {
-    let mut object = normalize_plugin_mcp_server_value(value, source);
+    let mut object = normalize_plugin_mcp_server_value(value, source)?;
     if let PluginMcpSource::Environment {
         root,
         environment_id,
@@ -237,10 +238,10 @@ fn bind_environment_env_vars(config: &mut McpServerConfig) -> Result<(), String>
 fn normalize_plugin_mcp_server_value(
     value: JsonValue,
     source: PluginMcpSource<'_>,
-) -> JsonMap<String, JsonValue> {
+) -> Result<JsonMap<String, JsonValue>, String> {
     let mut object = match value {
         JsonValue::Object(object) => object,
-        _ => return JsonMap::new(),
+        _ => return Ok(JsonMap::new()),
     };
 
     if let Some(JsonValue::String(transport_type)) = object.remove("type") {
@@ -279,13 +280,51 @@ fn normalize_plugin_mcp_server_value(
         && let Some(JsonValue::String(cwd)) = object.get("cwd")
         && !Path::new(cwd).is_absolute()
     {
+        ensure_plugin_relative_path(cwd, "cwd")?;
         object.insert(
             "cwd".to_string(),
             JsonValue::String(root.join(cwd).display().to_string()),
         );
     }
+    if let PluginMcpSource::Host { root } = source
+        && let Some(JsonValue::String(command)) = object.get("command")
+        && relative_plugin_command(command)
+    {
+        ensure_plugin_relative_path(command, "command")?;
+        let resolved = root.join(command);
+        #[cfg(windows)]
+        if !resolved.is_file() && resolved.extension().is_none() {
+            resolved.set_extension("exe");
+        }
+        object.insert(
+            "command".to_string(),
+            JsonValue::String(resolved.display().to_string()),
+        );
+    }
 
-    object
+    Ok(object)
+}
+
+fn relative_plugin_command(command: &str) -> bool {
+    !Path::new(command).is_absolute()
+        && (command.starts_with("./")
+            || command.starts_with(".\\")
+            || command.contains('/')
+            || command.contains('\\'))
+}
+
+fn ensure_plugin_relative_path(path: &str, field: &str) -> Result<(), String> {
+    if Path::new(path).components().any(|component| {
+        matches!(
+            component,
+            Component::ParentDir | Component::RootDir | Component::Prefix(_)
+        )
+    }) {
+        return Err(format!(
+            "plugin MCP {field} `{path}` must remain within the installed plugin root"
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

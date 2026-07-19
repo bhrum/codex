@@ -1,11 +1,16 @@
 [package]
-name = "mahayana-product"
+name = "mahayana-platform-client"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish = false
 
 [dependencies]
+anyhow.workspace = true
+codex-login.workspace = true
+codex-secrets.workspace = true
+mahayana-platform-core.workspace = true
+reqwest.workspace = true
+serde.workspace = true
 serde_json.workspace = true
-ureq.workspace = true
 url.workspace = true

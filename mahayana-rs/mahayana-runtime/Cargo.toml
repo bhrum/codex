@@ -18,6 +18,7 @@ telemetry = []
 [dependencies]
 async-trait.workspace = true
 crossbeam-channel.workspace = true
+fabushi-official-miniapps.workspace = true
 mahayana-agent.workspace = true
 mahayana-conversation.workspace = true
 mahayana-core.workspace = true

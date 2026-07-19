@@ -10,8 +10,30 @@ pub struct PluginManifest<Resource> {
     pub version: Option<String>,
     pub description: Option<String>,
     pub keywords: Vec<String>,
+    pub runtime_variants: Vec<PluginRuntimeVariant>,
     pub paths: PluginManifestPaths<Resource>,
     pub interface: Option<PluginManifestInterface<Resource>>,
+}
+
+/// A platform-qualified MCP server candidate declared by a plugin.
+///
+/// Runtime variants only select one server from the plugin's standard MCP
+/// configuration. They never carry messages or introduce another app
+/// protocol; all runtime traffic still uses MCP.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginRuntimeVariant {
+    pub id: String,
+    pub server: String,
+    pub platforms: Vec<PluginRuntimePlatform>,
+    pub priority: i32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PluginRuntimePlatform {
+    Cli,
+    Desktop,
+    Mobile,
+    Web,
 }
 
 /// Component resources declared by a plugin manifest.
@@ -90,6 +112,25 @@ impl<Resource> PluginManifest<Resource> {
             .unwrap_or(&self.name)
     }
 
+    /// Selects the single highest-priority MCP runtime for a host platform.
+    ///
+    /// The returned variant only names a server from the plugin's standard
+    /// MCP configuration. Hosts must connect that server and leave all other
+    /// variants disconnected.
+    pub fn runtime_variant_for(
+        &self,
+        platform: PluginRuntimePlatform,
+    ) -> Option<&PluginRuntimeVariant> {
+        self.runtime_variants
+            .iter()
+            .filter(|variant| variant.platforms.contains(&platform))
+            .max_by(|left, right| {
+                left.priority
+                    .cmp(&right.priority)
+                    .then_with(|| right.id.cmp(&left.id))
+            })
+    }
+
     /// Maps every path-bearing resource in the manifest.
     pub fn try_map_resources<Mapped, Error>(
         self,
@@ -100,6 +141,7 @@ impl<Resource> PluginManifest<Resource> {
             version,
             description,
             keywords,
+            runtime_variants,
             paths,
             interface,
         } = self;
@@ -176,6 +218,7 @@ impl<Resource> PluginManifest<Resource> {
             version,
             description,
             keywords,
+            runtime_variants,
             paths: PluginManifestPaths {
                 skills: skills
                     .into_iter()

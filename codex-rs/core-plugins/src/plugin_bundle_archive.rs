@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use tar::Archive;
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum PluginBundlePackError {
+pub enum PluginBundlePackError {
     #[error("invalid plugin path `{path}`: {reason}")]
     InvalidPluginPath { path: PathBuf, reason: String },
 
@@ -26,7 +26,7 @@ pub(crate) enum PluginBundlePackError {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum PluginBundleUnpackError {
+pub enum PluginBundleUnpackError {
     #[error(
         "plugin bundle extracted size would be {bytes} bytes, exceeding maximum total size of {max_bytes} bytes"
     )]
@@ -49,7 +49,7 @@ impl PluginBundleUnpackError {
     }
 }
 
-pub(crate) fn pack_plugin_bundle_tar_gz(
+pub fn pack_plugin_bundle_tar_gz(
     plugin_path: &Path,
     max_bytes: usize,
 ) -> Result<Vec<u8>, PluginBundlePackError> {
@@ -121,7 +121,7 @@ fn archive_io_error(source: io::Error) -> PluginBundlePackError {
     PluginBundlePackError::Io { source }
 }
 
-pub(crate) fn unpack_plugin_bundle_tar_gz(
+pub fn unpack_plugin_bundle_tar_gz(
     bytes: &[u8],
     destination: &Path,
     max_total_bytes: u64,

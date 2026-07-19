@@ -1,6 +1,8 @@
 pub(crate) mod debug_sandbox;
 mod exit_status;
 pub(crate) mod login;
+pub mod marketplace_cmd;
+pub mod plugin_cmd;
 
 use clap::Args;
 use clap::Parser;

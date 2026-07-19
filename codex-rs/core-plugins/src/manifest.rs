@@ -16,6 +16,8 @@ pub type PluginManifestInterface = codex_plugin::manifest::PluginManifestInterfa
 pub type PluginManifestMcpServers =
     codex_plugin::manifest::PluginManifestMcpServers<AbsolutePathBuf>;
 pub type PluginManifestPaths = codex_plugin::manifest::PluginManifestPaths<AbsolutePathBuf>;
+pub type PluginRuntimePlatform = codex_plugin::manifest::PluginRuntimePlatform;
+pub type PluginRuntimeVariant = codex_plugin::manifest::PluginRuntimeVariant;
 
 pub(crate) type UriPluginManifest = codex_plugin::manifest::PluginManifest<PathUri>;
 
@@ -30,6 +32,8 @@ struct RawPluginManifest {
     description: Option<String>,
     #[serde(default)]
     keywords: Vec<String>,
+    #[serde(default)]
+    runtime_variants: Vec<RawPluginRuntimeVariant>,
     // Keep manifest paths as raw strings so we can validate the required `./...` syntax before
     // resolving them under the plugin root.
     #[serde(default)]
@@ -42,6 +46,37 @@ struct RawPluginManifest {
     hooks: Option<RawPluginManifestHooks>,
     #[serde(default)]
     interface: Option<RawPluginManifestInterface>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawPluginRuntimeVariant {
+    id: String,
+    server: String,
+    #[serde(default)]
+    platforms: Vec<RawPluginRuntimePlatform>,
+    #[serde(default)]
+    priority: i32,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum RawPluginRuntimePlatform {
+    Cli,
+    Desktop,
+    Mobile,
+    Web,
+}
+
+impl From<RawPluginRuntimePlatform> for codex_plugin::manifest::PluginRuntimePlatform {
+    fn from(value: RawPluginRuntimePlatform) -> Self {
+        match value {
+            RawPluginRuntimePlatform::Cli => Self::Cli,
+            RawPluginRuntimePlatform::Desktop => Self::Desktop,
+            RawPluginRuntimePlatform::Mobile => Self::Mobile,
+            RawPluginRuntimePlatform::Web => Self::Web,
+        }
+    }
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -162,6 +197,7 @@ pub(crate) fn parse_plugin_manifest_uri(
         version,
         description,
         keywords,
+        runtime_variants,
         skills,
         mcp_servers,
         apps,
@@ -257,6 +293,23 @@ pub(crate) fn parse_plugin_manifest_uri(
         version,
         description,
         keywords,
+        runtime_variants: runtime_variants
+            .into_iter()
+            .filter_map(|variant| {
+                let id = variant.id.trim().to_string();
+                let server = variant.server.trim().to_string();
+                if id.is_empty() || server.is_empty() || variant.platforms.is_empty() {
+                    tracing::warn!("ignoring invalid plugin runtime variant");
+                    return None;
+                }
+                Some(codex_plugin::manifest::PluginRuntimeVariant {
+                    id,
+                    server,
+                    platforms: variant.platforms.into_iter().map(Into::into).collect(),
+                    priority: variant.priority,
+                })
+            })
+            .collect(),
         paths: codex_plugin::manifest::PluginManifestPaths {
             skills: resolve_manifest_paths(plugin_root, "skills", skills.as_ref()),
             mcp_servers: resolve_manifest_mcp_servers(plugin_root, mcp_servers),
@@ -519,6 +572,8 @@ mod tests {
     use codex_plugin::manifest::PluginManifestInterface;
     use codex_plugin::manifest::PluginManifestMcpServers;
     use codex_plugin::manifest::PluginManifestPaths;
+    use codex_plugin::manifest::PluginRuntimePlatform;
+    use codex_plugin::manifest::PluginRuntimeVariant;
     use codex_protocol::capabilities::CapabilityRootLocation;
     use codex_protocol::capabilities::SelectedCapabilityRoot;
     use codex_utils_absolute_path::AbsolutePathBuf;
@@ -706,6 +761,70 @@ mod tests {
     }
 
     #[test]
+    fn plugin_manifest_reads_runtime_variants() {
+        let tmp = tempdir().expect("tempdir");
+        let plugin_root = tmp.path().join("demo-plugin");
+        fs::create_dir_all(plugin_root.join(".codex-plugin")).expect("create manifest dir");
+        fs::write(
+            plugin_root.join(".codex-plugin/plugin.json"),
+            r#"{
+  "name": "demo-plugin",
+  "runtimeVariants": [
+    {
+      "id": "local",
+      "server": "demo-local",
+      "platforms": ["cli", "desktop"],
+      "priority": 20
+    },
+    {
+      "id": "account-http",
+      "server": "demo-http",
+      "platforms": ["desktop", "mobile", "web"],
+      "priority": 10
+    }
+  ]
+}"#,
+        )
+        .expect("write manifest");
+
+        let manifest = load_manifest(&plugin_root);
+
+        assert_eq!(
+            manifest.runtime_variants,
+            vec![
+                PluginRuntimeVariant {
+                    id: "local".to_string(),
+                    server: "demo-local".to_string(),
+                    platforms: vec![PluginRuntimePlatform::Cli, PluginRuntimePlatform::Desktop,],
+                    priority: 20,
+                },
+                PluginRuntimeVariant {
+                    id: "account-http".to_string(),
+                    server: "demo-http".to_string(),
+                    platforms: vec![
+                        PluginRuntimePlatform::Desktop,
+                        PluginRuntimePlatform::Mobile,
+                        PluginRuntimePlatform::Web,
+                    ],
+                    priority: 10,
+                },
+            ]
+        );
+        assert_eq!(
+            manifest
+                .runtime_variant_for(PluginRuntimePlatform::Desktop)
+                .map(|variant| variant.server.as_str()),
+            Some("demo-local")
+        );
+        assert_eq!(
+            manifest
+                .runtime_variant_for(PluginRuntimePlatform::Web)
+                .map(|variant| variant.server.as_str()),
+            Some("demo-http")
+        );
+    }
+
+    #[test]
     fn plugin_manifest_uses_alternate_discoverable_path() {
         let tmp = tempdir().expect("tempdir");
         let plugin_root = tmp.path().join("demo-plugin");
@@ -853,6 +972,7 @@ mod tests {
                 version: None,
                 description: None,
                 keywords: Vec::new(),
+                runtime_variants: Vec::new(),
                 paths: PluginManifestPaths {
                     skills: vec![plugin_root.join("skills").expect("skills URI")],
                     mcp_servers: Some(PluginManifestMcpServers::Path(

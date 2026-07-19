@@ -1114,6 +1114,12 @@ impl PluginRequestProcessor {
                     apps: app_summaries,
                     app_templates: Vec::new(),
                     mcp_servers: outcome.plugin.mcp_server_names,
+                    runtime_variants: outcome
+                        .plugin
+                        .runtime_variants
+                        .into_iter()
+                        .map(local_runtime_variant_to_info)
+                        .collect(),
                     scheduled_tasks: None,
                 }
             }
@@ -2273,7 +2279,36 @@ fn remote_plugin_detail_to_info(
         apps,
         app_templates,
         mcp_servers: detail.mcp_servers,
+        runtime_variants: Vec::new(),
         scheduled_tasks: detail.scheduled_tasks,
+    }
+}
+
+fn local_runtime_variant_to_info(
+    variant: codex_plugin::manifest::PluginRuntimeVariant,
+) -> codex_app_server_protocol::PluginRuntimeVariant {
+    codex_app_server_protocol::PluginRuntimeVariant {
+        id: variant.id,
+        server: variant.server,
+        platforms: variant
+            .platforms
+            .into_iter()
+            .map(|platform| match platform {
+                codex_plugin::manifest::PluginRuntimePlatform::Cli => {
+                    codex_app_server_protocol::PluginRuntimePlatform::Cli
+                }
+                codex_plugin::manifest::PluginRuntimePlatform::Desktop => {
+                    codex_app_server_protocol::PluginRuntimePlatform::Desktop
+                }
+                codex_plugin::manifest::PluginRuntimePlatform::Mobile => {
+                    codex_app_server_protocol::PluginRuntimePlatform::Mobile
+                }
+                codex_plugin::manifest::PluginRuntimePlatform::Web => {
+                    codex_app_server_protocol::PluginRuntimePlatform::Web
+                }
+            })
+            .collect(),
+        priority: variant.priority,
     }
 }
 

@@ -1,0 +1,38 @@
+# Copy to wrangler.auth-production.toml, replace every REPLACE_* value, and
+# follow PRODUCTION_AUTH_CUTOVER.md. Do not commit the copied file or secrets.
+name = "mahayana-platform-auth-prod"
+main = "build/worker/shim.mjs"
+compatibility_date = "2026-07-18"
+workers_dev = false
+routes = [
+  { pattern = "api.ombhrum.com", custom_domain = true }
+]
+
+[build]
+command = "worker-build --release --no-panic-recovery"
+
+[vars]
+ACCESS_TOKEN_KEY_ID = "REPLACE_WITH_ACTIVE_RSA_KEY_ID"
+
+[[d1_databases]]
+binding = "ACCOUNT_DB"
+database_name = "fabushi-db"
+database_id = "REPLACE_WITH_PRODUCTION_ACCOUNT_DB_ID"
+migrations_dir = "account-migrations"
+
+[[d1_databases]]
+binding = "PLATFORM_DB"
+database_name = "mahayana-platform"
+database_id = "REPLACE_WITH_PRODUCTION_PLATFORM_DB_ID"
+migrations_dir = "migrations"
+
+[[r2_buckets]]
+binding = "PLUGIN_PACKAGES"
+bucket_name = "mahayana-plugin-packages"
+
+[[queues.producers]]
+binding = "PLATFORM_EVENTS"
+queue = "mahayana-platform-events"
+
+[observability.logs]
+enabled = true

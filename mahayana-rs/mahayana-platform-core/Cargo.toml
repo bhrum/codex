@@ -1,0 +1,17 @@
+[package]
+name = "mahayana-platform-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Runtime-neutral contracts for the Mahayana plugin marketplace and commerce platform."
+publish = false
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+pretty_assertions = "1"

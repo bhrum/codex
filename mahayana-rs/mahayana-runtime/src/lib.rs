@@ -3,6 +3,9 @@
 use crossbeam_channel::Receiver;
 use crossbeam_channel::RecvTimeoutError;
 use crossbeam_channel::Sender;
+use fabushi_official_miniapps::OfficialMiniAppEngine;
+use fabushi_official_miniapps::app_definition;
+use fabushi_official_miniapps::home_html;
 use mahayana_agent::AgentBackend;
 use mahayana_agent::AgentError;
 use mahayana_agent::AgentEvent;
@@ -28,6 +31,7 @@ use mahayana_core::Message;
 use mahayana_core::MessageId;
 use mahayana_core::MessageRole;
 use mahayana_core::OperationId;
+use mahayana_core::PluginCommandDescriptor;
 use mahayana_core::RUNTIME_ABI_VERSION;
 use mahayana_core::RuntimeCommand;
 use mahayana_core::RuntimeConfig;
@@ -36,6 +40,7 @@ use mahayana_core::RuntimeResponse;
 use mahayana_core::RuntimeStatus;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::future::Future;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -120,6 +125,8 @@ pub struct MahayanaRuntime {
     event_rx: Receiver<RuntimeEvent>,
     operations: Arc<Mutex<HashMap<OperationId, String>>>,
     approvals: Arc<Mutex<HashMap<ApprovalId, String>>>,
+    official_miniapps: Mutex<OfficialMiniAppEngine>,
+    approved_local_plugin_tools: Mutex<HashSet<(String, String)>>,
 }
 
 impl MahayanaRuntime {
@@ -156,6 +163,8 @@ impl MahayanaRuntime {
             event_rx,
             operations: Arc::new(Mutex::new(HashMap::new())),
             approvals: Arc::new(Mutex::new(HashMap::new())),
+            official_miniapps: Mutex::new(OfficialMiniAppEngine::default()),
+            approved_local_plugin_tools: Mutex::new(HashSet::new()),
         };
         runtime
             .event_tx
@@ -216,6 +225,91 @@ impl MahayanaRuntime {
                     data: conversations,
                 })
             }
+            RuntimeCommand::ListPluginCommands { plugin_id } => {
+                if plugin_id
+                    .as_deref()
+                    .is_some_and(|plugin_id| app_definition(plugin_id).is_some())
+                    && matches!(
+                        self.config.build_profile,
+                        mahayana_core::BuildProfile::MobileEmbedded
+                    )
+                {
+                    return Ok(RuntimeResponse::PluginCommands {
+                        data: local_plugin_commands(plugin_id.as_deref()),
+                    });
+                }
+                let Some(provider) = self.providers.get("miniapp") else {
+                    return Ok(RuntimeResponse::PluginCommands {
+                        data: local_plugin_commands(plugin_id.as_deref()),
+                    });
+                };
+                let data: Vec<PluginCommandDescriptor> = self
+                    .async_runtime
+                    .block_on(provider.list_plugin_commands(plugin_id.as_deref()))?;
+                Ok(RuntimeResponse::PluginCommands { data })
+            }
+            RuntimeCommand::PluginUi { plugin_id } => Ok(RuntimeResponse::PluginUi {
+                html: home_html(&plugin_id).map_err(RuntimeError::LocalPlugin)?,
+                plugin_id,
+            }),
+            RuntimeCommand::ApproveLocalPluginTool { plugin_id, tool } => {
+                let definition = app_definition(&plugin_id).ok_or_else(|| {
+                    RuntimeError::LocalPlugin(format!("unknown official plugin: {plugin_id}"))
+                })?;
+                if !definition.tools.iter().any(|descriptor| {
+                    descriptor.get("name").and_then(Value::as_str) == Some(tool.as_str())
+                }) {
+                    return Err(RuntimeError::LocalPlugin(format!(
+                        "{plugin_id} has no MCP Tool {tool}"
+                    )));
+                }
+                lock(&self.approved_local_plugin_tools)?.insert((plugin_id.clone(), tool.clone()));
+                Ok(RuntimeResponse::LocalPluginToolApproved { plugin_id, tool })
+            }
+            RuntimeCommand::CallLocalPluginTool {
+                plugin_id,
+                tool,
+                arguments,
+            } => {
+                let definition = app_definition(&plugin_id).ok_or_else(|| {
+                    RuntimeError::LocalPlugin(format!("unknown official plugin: {plugin_id}"))
+                })?;
+                let descriptor = definition
+                    .tools
+                    .iter()
+                    .find(|descriptor| {
+                        descriptor.get("name").and_then(Value::as_str) == Some(tool.as_str())
+                    })
+                    .ok_or_else(|| {
+                        RuntimeError::LocalPlugin(format!("{plugin_id} has no MCP Tool {tool}"))
+                    })?;
+                let read_only = descriptor
+                    .pointer("/annotations/readOnlyHint")
+                    .and_then(Value::as_bool)
+                    == Some(true);
+                if !read_only
+                    && !lock(&self.approved_local_plugin_tools)?
+                        .contains(&(plugin_id.clone(), tool.clone()))
+                {
+                    return Err(RuntimeError::LocalPlugin(format!(
+                        "host approval is required for {plugin_id}/{tool}"
+                    )));
+                }
+                let outcome = lock(&self.official_miniapps)?
+                    .call_tool(&plugin_id, &tool, arguments)
+                    .map_err(RuntimeError::LocalPlugin)?;
+                let progress = outcome
+                    .progress
+                    .into_iter()
+                    .map(|update| serde_json::to_value(update).unwrap_or(Value::Null))
+                    .collect();
+                Ok(RuntimeResponse::LocalPluginToolResult {
+                    plugin_id,
+                    tool,
+                    result: outcome.result,
+                    progress,
+                })
+            }
             RuntimeCommand::ConversationHistory {
                 conversation_id,
                 limit,
@@ -258,11 +352,19 @@ impl MahayanaRuntime {
                         Ok(()) => RuntimeEvent::OperationCompleted {
                             operation_id: task_operation_id.clone(),
                         },
-                        Err(error) => RuntimeEvent::OperationFailed {
-                            operation_id: task_operation_id.clone(),
-                            code: "provider_error".to_string(),
-                            message: error.to_string(),
-                        },
+                        Err(error) => {
+                            let code = if matches!(error, ConversationError::UsageLimitExceeded(_))
+                            {
+                                "usage_limit_exceeded"
+                            } else {
+                                "provider_error"
+                            };
+                            RuntimeEvent::OperationFailed {
+                                operation_id: task_operation_id.clone(),
+                                code: code.to_string(),
+                                message: error.to_string(),
+                            }
+                        }
                     };
                     let _ = event_tx.send(event);
                     if let Ok(mut operations) = operations.lock() {
@@ -509,6 +611,18 @@ impl AgentEventSink for AgentEventBridge {
                     message,
                 }
             }
+            AgentEvent::TokenUsageUpdated { usage } => RuntimeEvent::ModelUsageUpdated {
+                operation_id: self.operation_id.clone(),
+                usage,
+            },
+            AgentEvent::ToolProgress { message } => RuntimeEvent::PluginProgress {
+                operation_id: self.operation_id.clone(),
+                plugin_id: "codex".into(),
+                tool: String::new(),
+                progress: 0,
+                total: 0,
+                message,
+            },
             AgentEvent::ApprovalRequested {
                 approval_id,
                 title,
@@ -527,7 +641,10 @@ impl AgentEventSink for AgentEventBridge {
 }
 
 fn agent_error(error: AgentError) -> ConversationError {
-    ConversationError::Provider(error.to_string())
+    match error {
+        AgentError::UsageLimitExceeded(message) => ConversationError::UsageLimitExceeded(message),
+        error => ConversationError::Provider(error.to_string()),
+    }
 }
 
 fn now_ms() -> i64 {
@@ -559,6 +676,45 @@ pub enum RuntimeError {
     EventConsumerClosed,
     #[error("runtime synchronization failed: {0}")]
     Synchronization(String),
+    #[error("local Mini App runtime failed: {0}")]
+    LocalPlugin(String),
+}
+
+fn local_plugin_commands(plugin_id: Option<&str>) -> Vec<PluginCommandDescriptor> {
+    let mut commands = fabushi_official_miniapps::OFFICIAL_PLUGIN_IDS
+        .iter()
+        .filter(|candidate| plugin_id.is_none_or(|plugin_id| plugin_id == **candidate))
+        .filter_map(|plugin_id| app_definition(plugin_id))
+        .flat_map(|definition| {
+            definition
+                .commands
+                .into_iter()
+                .filter_map(move |(command, tool)| {
+                    let descriptor = definition.tools.iter().find(|descriptor| {
+                        descriptor.get("name").and_then(Value::as_str) == Some(tool.as_str())
+                    })?;
+                    Some(PluginCommandDescriptor {
+                        plugin_id: definition.id.clone(),
+                        command,
+                        tool,
+                        input_schema: descriptor
+                            .get("inputSchema")
+                            .cloned()
+                            .unwrap_or_else(|| serde_json::json!({"type":"object"})),
+                        annotations: descriptor
+                            .get("annotations")
+                            .cloned()
+                            .unwrap_or_else(|| serde_json::json!({})),
+                    })
+                })
+        })
+        .collect::<Vec<_>>();
+    commands.sort_by(|left, right| {
+        left.plugin_id
+            .cmp(&right.plugin_id)
+            .then_with(|| left.command.cmp(&right.command))
+    });
+    commands
 }
 
 #[cfg(test)]

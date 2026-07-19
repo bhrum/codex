@@ -1,0 +1,14 @@
+package mahayana:host@1.0.0;
+
+interface bridge {
+    record host-error {
+        code: string,
+        message: string,
+    }
+
+    invoke: func(method: string, params-json: string) -> result<string, host-error>;
+}
+
+world miniapp {
+    import bridge;
+}

@@ -37,6 +37,7 @@ const SECRETS_VERSION: u8 = 1;
 const LOCAL_SECRETS_FILENAME: &str = "local.age";
 const CODEX_AUTH_SECRETS_FILENAME: &str = "codex_auth.age";
 const MCP_OAUTH_SECRETS_FILENAME: &str = "mcp_oauth.age";
+const MAHAYANA_AUTH_SECRETS_FILENAME: &str = "mahayana_auth.age";
 
 /// Selects the local encrypted file used by a `LocalSecretsBackend`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -48,6 +49,8 @@ pub enum LocalSecretsNamespace {
     CodexAuth,
     /// OAuth credentials for external MCP servers.
     McpOAuth,
+    /// Mahayana account credentials shared by the Mahayana CLI and app hosts.
+    MahayanaAuth,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -144,6 +147,7 @@ impl LocalSecretsBackend {
             LocalSecretsNamespace::ManagedSecrets => LOCAL_SECRETS_FILENAME,
             LocalSecretsNamespace::CodexAuth => CODEX_AUTH_SECRETS_FILENAME,
             LocalSecretsNamespace::McpOAuth => MCP_OAUTH_SECRETS_FILENAME,
+            LocalSecretsNamespace::MahayanaAuth => MAHAYANA_AUTH_SECRETS_FILENAME,
         };
         self.secrets_dir().join(filename)
     }
@@ -193,7 +197,7 @@ impl LocalSecretsBackend {
         let account = compute_keyring_account(&self.codex_home);
         let loaded = self
             .keyring_store
-            .load(keyring_service(), &account)
+            .load(keyring_service(self.namespace), &account)
             .map_err(|err| anyhow::anyhow!(err.message()))
             .with_context(|| format!("failed to load secrets key from keyring for {account}"))?;
         match loaded {
@@ -204,7 +208,11 @@ impl LocalSecretsBackend {
                 // fully local/offline for the MVP.
                 let generated = generate_passphrase()?;
                 self.keyring_store
-                    .save(keyring_service(), &account, generated.expose_secret())
+                    .save(
+                        keyring_service(self.namespace),
+                        &account,
+                        generated.expose_secret(),
+                    )
                     .map_err(|err| anyhow::anyhow!(err.message()))
                     .context("failed to persist secrets key in keyring")?;
                 Ok(generated)
@@ -460,14 +468,20 @@ mod tests {
         );
         let mcp_backend = LocalSecretsBackend::new_with_namespace(
             codex_home.path().to_path_buf(),
-            keyring,
+            keyring.clone(),
             LocalSecretsNamespace::McpOAuth,
+        );
+        let mahayana_backend = LocalSecretsBackend::new_with_namespace(
+            codex_home.path().to_path_buf(),
+            keyring,
+            LocalSecretsNamespace::MahayanaAuth,
         );
         let scope = SecretScope::Global;
         let name = SecretName::new("TEST_SECRET")?;
 
         codex_auth_backend.set(&scope, &name, "codex-auth-value")?;
         mcp_backend.set(&scope, &name, "mcp-value")?;
+        mahayana_backend.set(&scope, &name, "mahayana-value")?;
 
         assert_eq!(
             codex_auth_backend.get(&scope, &name)?,
@@ -476,6 +490,10 @@ mod tests {
         assert_eq!(
             mcp_backend.get(&scope, &name)?,
             Some("mcp-value".to_string())
+        );
+        assert_eq!(
+            mahayana_backend.get(&scope, &name)?,
+            Some("mahayana-value".to_string())
         );
         assert!(
             codex_home
@@ -489,6 +507,13 @@ mod tests {
                 .path()
                 .join("secrets")
                 .join("mcp_oauth.age")
+                .exists()
+        );
+        assert!(
+            codex_home
+                .path()
+                .join("secrets")
+                .join("mahayana_auth.age")
                 .exists()
         );
         assert!(!codex_home.path().join("secrets").join("local.age").exists());

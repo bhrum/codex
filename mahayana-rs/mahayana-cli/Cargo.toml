@@ -10,10 +10,22 @@ name = "mahayana"
 path = "src/main.rs"
 
 [dependencies]
+anyhow.workspace = true
+clap = { version = "4", features = ["derive"] }
 codex-arg0.workspace = true
-fabushi-miniapp-core = { path = "../providers/miniapp-core" }
-fabushi-miniapp-runtime = { path = "../providers/fabushi-miniapp-runtime" }
+codex-cli.workspace = true
+codex-core-plugins.workspace = true
+codex-tui.workspace = true
+crossterm.workspace = true
 mahayana-ffi = { path = "../mahayana-ffi" }
-mahayana-product = { path = "../mahayana-product" }
+mahayana-product = { package = "mahayana-platform-client", path = "../mahayana-product" }
+mahayana-miniapp-protocol.workspace = true
+mahayana-platform-core.workspace = true
+mahayana-plugin-host.workspace = true
+ratatui.workspace = true
 rpassword.workspace = true
 serde_json.workspace = true
+tokio.workspace = true
+unicode-width.workspace = true
+url.workspace = true
+uuid.workspace = true

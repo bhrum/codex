@@ -663,7 +663,28 @@ pub struct PluginDetail {
     pub apps: Vec<AppSummary>,
     pub app_templates: Vec<AppTemplateSummary>,
     pub mcp_servers: Vec<String>,
+    pub runtime_variants: Vec<PluginRuntimeVariant>,
     pub scheduled_tasks: Option<Vec<ScheduledTaskSummary>>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PluginRuntimeVariant {
+    pub id: String,
+    pub server: String,
+    pub platforms: Vec<PluginRuntimePlatform>,
+    pub priority: i32,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub enum PluginRuntimePlatform {
+    Cli,
+    Desktop,
+    Mobile,
+    Web,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]

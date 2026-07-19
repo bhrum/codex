@@ -600,6 +600,13 @@ impl ChatComposer {
         self.plugins_command_enabled = enabled;
     }
 
+    /// Enable or disable the built-in Codex slash-command popup for embedded
+    /// composer consumers that provide their own command projection.
+    pub fn set_slash_commands_enabled(&mut self, enabled: bool) {
+        self.config.slash_commands_enabled = enabled;
+        self.sync_popups();
+    }
+
     pub fn set_token_activity_command_enabled(&mut self, enabled: bool) {
         self.token_activity_command_enabled = enabled;
     }

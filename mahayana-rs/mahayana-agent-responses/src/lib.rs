@@ -17,6 +17,8 @@ use mahayana_core::AgentThreadId;
 use mahayana_core::Message;
 use mahayana_core::MessageId;
 use mahayana_core::MessageRole;
+use mahayana_core::ModelTokenUsage;
+use mahayana_core::ModelTokenUsageSnapshot;
 use mahayana_core::OperationId;
 use serde_json::Value;
 use serde_json::json;
@@ -137,23 +139,26 @@ impl AgentBackend for ResponsesAgentBackend {
         }
         let inference = inference
             .map_err(|error| AgentError::Backend(format!("Responses task failed: {error}")))?;
-        let text = inference?;
+        let inference = inference?;
         self.histories
             .lock()
             .map_err(|_| AgentError::Backend("Responses history mutex poisoned".into()))?
             .get_mut(&request.thread_id)
             .ok_or_else(|| AgentError::ThreadNotFound(request.thread_id.clone()))?
-            .push(json!({"role": "assistant", "content": text}));
+            .push(json!({"role": "assistant", "content": inference.text.clone()}));
 
         events.emit(AgentEvent::MessageDelta {
-            delta: text.clone(),
+            delta: inference.text.clone(),
         })?;
+        if let Some(usage) = inference.usage {
+            events.emit(AgentEvent::TokenUsageUpdated { usage })?;
+        }
         events.emit(AgentEvent::MessageCompleted {
             message: Message {
                 id: MessageId::generated("responses-message"),
                 conversation_id: request.conversation_id,
                 role: MessageRole::Assistant,
-                text,
+                text: inference.text,
                 created_at_ms: now_ms(),
                 metadata: json!({
                     "agentBackend": self.name(),
@@ -193,7 +198,7 @@ impl AgentBackend for ResponsesAgentBackend {
 fn request_response(
     config: &ResponsesAgentConfig,
     input: Vec<Value>,
-) -> Result<String, AgentError> {
+) -> Result<InferenceResult, AgentError> {
     let endpoint = if config.responses_base_url.ends_with("/responses") {
         config.responses_base_url.clone()
     } else {
@@ -223,13 +228,33 @@ fn request_response(
             .unwrap_or("Responses endpoint returned an error");
         return Err(AgentError::Backend(message.to_string()));
     }
-    extract_output_text(&payload).ok_or_else(|| {
+    let text = extract_output_text(&payload).ok_or_else(|| {
         AgentError::Backend("Responses endpoint returned no assistant output text".into())
+    })?;
+    Ok(InferenceResult {
+        text,
+        usage: extract_token_usage(&payload),
     })
+}
+
+struct InferenceResult {
+    text: String,
+    usage: Option<ModelTokenUsageSnapshot>,
 }
 
 fn redacted_http_error(error: ureq::Error) -> AgentError {
     match error {
+        ureq::Error::Status(429, response) => {
+            let payload = response.into_json::<Value>().unwrap_or(Value::Null);
+            let message = payload
+                .pointer("/error/message")
+                .or_else(|| payload.get("message"))
+                .and_then(Value::as_str)
+                .filter(|message| !message.trim().is_empty())
+                .unwrap_or("本月模型 token 额度已用完")
+                .to_string();
+            AgentError::UsageLimitExceeded(message)
+        }
         ureq::Error::Status(status, _) => {
             AgentError::Backend(format!("Responses endpoint returned HTTP {status}"))
         }
@@ -259,6 +284,55 @@ fn extract_output_text(payload: &Value) -> Option<String> {
         .pointer("/choices/0/message/content")
         .and_then(Value::as_str)
         .and_then(non_empty)
+}
+
+fn extract_token_usage(payload: &Value) -> Option<ModelTokenUsageSnapshot> {
+    let usage = payload.get("usage").or_else(|| {
+        payload
+            .get("response")
+            .and_then(|response| response.get("usage"))
+    })?;
+    let input_tokens = usage_i64(usage, &["input_tokens", "prompt_tokens", "inputTokens"]);
+    let cached_input_tokens = usage_i64(usage, &["cached_input_tokens", "cachedInputTokens"]).max(
+        usage
+            .pointer("/input_tokens_details/cached_tokens")
+            .and_then(Value::as_i64)
+            .unwrap_or(0),
+    );
+    let output_tokens = usage_i64(
+        usage,
+        &["output_tokens", "completion_tokens", "outputTokens"],
+    );
+    let reasoning_output_tokens =
+        usage_i64(usage, &["reasoning_output_tokens", "reasoningOutputTokens"]).max(
+            usage
+                .pointer("/output_tokens_details/reasoning_tokens")
+                .and_then(Value::as_i64)
+                .unwrap_or(0),
+        );
+    let explicit_total = usage_i64(usage, &["total_tokens", "totalTokens"]);
+    let total_tokens = explicit_total.max(input_tokens.saturating_add(output_tokens));
+    if total_tokens <= 0 {
+        return None;
+    }
+    Some(ModelTokenUsageSnapshot {
+        total: None,
+        last: ModelTokenUsage {
+            total_tokens,
+            input_tokens,
+            cached_input_tokens,
+            output_tokens,
+            reasoning_output_tokens,
+        },
+        model_context_window: None,
+    })
+}
+
+fn usage_i64(usage: &Value, keys: &[&str]) -> i64 {
+    keys.iter()
+        .find_map(|key| usage.get(*key).and_then(Value::as_i64))
+        .unwrap_or(0)
+        .max(0)
 }
 
 fn non_empty(value: &str) -> Option<String> {
@@ -292,6 +366,33 @@ mod tests {
         );
         let chat = json!({"choices": [{"message": {"content": "善哉"}}]});
         assert_eq!(extract_output_text(&chat).as_deref(), Some("善哉"));
+    }
+
+    #[test]
+    fn projects_provider_usage_without_estimating_tokens() {
+        let payload = json!({
+            "usage": {
+                "input_tokens": 120,
+                "cached_input_tokens": 40,
+                "output_tokens": 30,
+                "reasoning_output_tokens": 5,
+                "total_tokens": 150
+            }
+        });
+        assert_eq!(
+            extract_token_usage(&payload),
+            Some(ModelTokenUsageSnapshot {
+                total: None,
+                last: ModelTokenUsage {
+                    total_tokens: 150,
+                    input_tokens: 120,
+                    cached_input_tokens: 40,
+                    output_tokens: 30,
+                    reasoning_output_tokens: 5,
+                },
+                model_context_window: None,
+            })
+        );
     }
 
     #[test]

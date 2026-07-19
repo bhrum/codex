@@ -303,6 +303,7 @@ pub struct PluginDetail {
     pub apps: Vec<AppConnectorId>,
     pub app_category_by_id: HashMap<String, String>,
     pub mcp_server_names: Vec<String>,
+    pub runtime_variants: Vec<crate::manifest::PluginRuntimeVariant>,
     pub details_unavailable_reason: Option<PluginDetailsUnavailableReason>,
 }
 
@@ -1827,6 +1828,7 @@ impl PluginsManager {
                 apps: Vec::new(),
                 app_category_by_id: HashMap::new(),
                 mcp_server_names: Vec::new(),
+                runtime_variants: Vec::new(),
                 details_unavailable_reason: Some(
                     PluginDetailsUnavailableReason::InstallRequiredForRemoteSource,
                 ),
@@ -1949,6 +1951,7 @@ impl PluginsManager {
             apps,
             app_category_by_id,
             mcp_server_names,
+            runtime_variants: manifest.runtime_variants,
             details_unavailable_reason: None,
         })
     }

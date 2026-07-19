@@ -34,6 +34,11 @@ pub struct ComposerInput {
 impl ComposerInput {
     /// Create a new composer input with a neutral placeholder.
     pub fn new() -> Self {
+        Self::new_with_placeholder("Compose new task")
+    }
+
+    /// Create a composer input with a caller-provided placeholder.
+    pub fn new_with_placeholder(placeholder: impl Into<String>) -> Self {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let sender = AppEventSender::new(tx.clone());
         // `enhanced_keys_supported=true` enables Shift+Enter newline hint/behavior.
@@ -41,7 +46,7 @@ impl ComposerInput {
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ true,
-            "Compose new task".to_string(),
+            placeholder.into(),
             /*disable_paste_burst*/ false,
         );
         Self { inner, _tx: tx, rx }
@@ -56,6 +61,26 @@ impl ComposerInput {
     pub fn clear(&mut self) {
         self.inner
             .set_text_content(String::new(), Vec::new(), Vec::new());
+    }
+
+    /// Return the current plain-text composer contents.
+    pub fn text(&self) -> String {
+        self.inner.current_text()
+    }
+
+    /// Replace the composer contents and place the cursor at the end.
+    pub fn replace_text(&mut self, text: impl Into<String>) {
+        self.inner
+            .set_text_content(text.into(), Vec::new(), Vec::new());
+        self.inner.move_cursor_to_end();
+        self.drain_app_events();
+    }
+
+    /// Embedded consumers can disable Codex's built-in slash popup when their
+    /// slash commands are supplied by another host capability.
+    pub fn set_slash_commands_enabled(&mut self, enabled: bool) {
+        self.inner.set_slash_commands_enabled(enabled);
+        self.drain_app_events();
     }
 
     /// Feed a key event into the composer and return a high-level action.

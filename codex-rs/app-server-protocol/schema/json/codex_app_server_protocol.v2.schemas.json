@@ -9818,6 +9818,12 @@
           },
           "type": "array"
         },
+        "runtimeVariants": {
+          "items": {
+            "$ref": "#/definitions/PluginRuntimeVariant"
+          },
+          "type": "array"
+        },
         "scheduledTasks": {
           "items": {
             "$ref": "#/definitions/ScheduledTaskSummary"
@@ -9849,6 +9855,7 @@
         "hooks",
         "marketplaceName",
         "mcpServers",
+        "runtimeVariants",
         "skills",
         "summary"
       ],
@@ -10277,6 +10284,42 @@
         "plugin"
       ],
       "title": "PluginReadResponse",
+      "type": "object"
+    },
+    "PluginRuntimePlatform": {
+      "enum": [
+        "cli",
+        "desktop",
+        "mobile",
+        "web"
+      ],
+      "type": "string"
+    },
+    "PluginRuntimeVariant": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "platforms": {
+          "items": {
+            "$ref": "#/definitions/PluginRuntimePlatform"
+          },
+          "type": "array"
+        },
+        "priority": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "server": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "platforms",
+        "priority",
+        "server"
+      ],
       "type": "object"
     },
     "PluginShareCheckoutParams": {

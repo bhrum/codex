@@ -7,6 +7,7 @@ use codex_app_server_client::InProcessAppServerRequestHandle;
 use codex_app_server_client::InProcessClientStartArgs;
 use codex_app_server_client::InProcessServerEvent;
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::CodexErrorInfo;
 use codex_app_server_protocol::DynamicToolCallOutputContentItem;
 use codex_app_server_protocol::DynamicToolCallParams;
 use codex_app_server_protocol::DynamicToolCallResponse;
@@ -15,12 +16,27 @@ use codex_app_server_protocol::DynamicToolNamespaceSpec;
 use codex_app_server_protocol::DynamicToolNamespaceTool;
 use codex_app_server_protocol::DynamicToolSpec;
 use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::ListMcpServerStatusParams;
+use codex_app_server_protocol::ListMcpServerStatusResponse;
+use codex_app_server_protocol::McpResourceReadParams;
+use codex_app_server_protocol::McpResourceReadResponse;
+use codex_app_server_protocol::McpServerStatusDetail;
+use codex_app_server_protocol::McpServerToolCallParams;
+use codex_app_server_protocol::McpServerToolCallResponse;
+use codex_app_server_protocol::PluginInstalledParams;
+use codex_app_server_protocol::PluginInstalledResponse;
+use codex_app_server_protocol::PluginReadParams;
+use codex_app_server_protocol::PluginReadResponse;
+use codex_app_server_protocol::PluginSource;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
+use codex_app_server_protocol::ThreadTokenUsage;
+use codex_app_server_protocol::TokenUsageBreakdown;
+use codex_app_server_protocol::TurnError;
 use codex_app_server_protocol::TurnInterruptParams;
 use codex_app_server_protocol::TurnInterruptResponse;
 use codex_app_server_protocol::TurnStartParams;
@@ -30,6 +46,8 @@ use codex_app_server_protocol::UserInput;
 use codex_arg0::Arg0DispatchPaths;
 use codex_config::CloudConfigBundleLoader;
 use codex_config::LoaderOverrides;
+use codex_config::McpServerConfig;
+use codex_config::McpServerTransportConfig;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
 use codex_exec_server::EnvironmentManager;
@@ -45,6 +63,8 @@ use mahayana_agent::AgentError;
 use mahayana_agent::AgentEvent;
 use mahayana_agent::AgentMessageRequest;
 use mahayana_agent::ApprovalResolution;
+use mahayana_agent::McpAppSession;
+use mahayana_agent::OpenMcpAppRequest;
 use mahayana_agent::SharedAgentEventSink;
 use mahayana_agent::StartThreadRequest;
 use mahayana_conversation::ConversationProvider;
@@ -56,7 +76,11 @@ use mahayana_core::ConversationId;
 use mahayana_core::Message;
 use mahayana_core::MessageId;
 use mahayana_core::MessageRole;
+use mahayana_core::ModelTokenUsage;
+use mahayana_core::ModelTokenUsageSnapshot;
 use mahayana_core::OperationId;
+use mahayana_plugin_host::LocalPlugin;
+use mahayana_plugin_host::select_runtime_with_availability;
 use serde_json::Value;
 use serde_json::json;
 use std::collections::HashMap;
@@ -73,10 +97,73 @@ use std::time::UNIX_EPOCH;
 use tokio::sync::oneshot;
 
 const PROVIDER_ID: &str = "dacheng-deepseek";
+const BUNDLED_MARKETPLACE_NAME: &str = "fabushi-official";
+
+fn bundled_plugin_overrides(
+    settings: &CodexAgentConfig,
+) -> Result<Vec<(String, toml::Value)>, AgentError> {
+    let Some(root) = settings.bundled_plugin_marketplace.as_deref() else {
+        return Ok(Vec::new());
+    };
+    if !root.join("marketplace.json").is_file() {
+        return Err(AgentError::Backend(format!(
+            "bundled plugin marketplace is invalid: {}",
+            root.display()
+        )));
+    }
+    let root = root
+        .canonicalize()
+        .map_err(|error| AgentError::Backend(error.to_string()))?;
+    let mut marketplace = toml::map::Map::new();
+    marketplace.insert("source_type".into(), toml::Value::String("local".into()));
+    marketplace.insert(
+        "source".into(),
+        toml::Value::String(root.to_string_lossy().into_owned()),
+    );
+    let mut overrides = vec![
+        ("features.plugins".into(), toml::Value::Boolean(true)),
+        (
+            format!("marketplaces.{BUNDLED_MARKETPLACE_NAME}"),
+            toml::Value::Table(marketplace),
+        ),
+    ];
+    for plugin_id in &settings.bundled_plugin_ids {
+        if plugin_id.is_empty()
+            || !plugin_id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        {
+            return Err(AgentError::Backend(format!(
+                "invalid bundled plugin id: {plugin_id}"
+            )));
+        }
+        if !root
+            .join("plugins")
+            .join(plugin_id)
+            .join(".codex-plugin/plugin.json")
+            .is_file()
+        {
+            return Err(AgentError::Backend(format!(
+                "bundled plugin `{plugin_id}` is missing from {}",
+                root.display()
+            )));
+        }
+        overrides.push((
+            format!("plugins.\"{plugin_id}@{BUNDLED_MARKETPLACE_NAME}\".enabled"),
+            toml::Value::Boolean(true),
+        ));
+    }
+    Ok(overrides)
+}
 
 #[derive(Clone)]
 pub struct CodexAgentConfig {
     pub codex_home: PathBuf,
+    /// Optional local marketplace bundled by the Fabushi desktop installer.
+    /// It is injected into Codex's in-memory config and never written into the
+    /// user's personal Codex configuration.
+    pub bundled_plugin_marketplace: Option<PathBuf>,
+    pub bundled_plugin_ids: Vec<String>,
     pub cwd: PathBuf,
     pub workspace_roots: Vec<PathBuf>,
     pub model: String,
@@ -129,7 +216,7 @@ struct ActiveOperation {
     conversation_id: mahayana_core::ConversationId,
     events: SharedAgentEventSink,
     assistant_text: String,
-    completion: oneshot::Sender<Result<(), String>>,
+    completion: oneshot::Sender<Result<(), AgentError>>,
 }
 
 struct PendingApproval {
@@ -584,6 +671,36 @@ impl CodexAgentInner {
         events.emit(AgentEvent::MessageDelta { delta })
     }
 
+    fn update_token_usage(
+        &self,
+        thread_id: &str,
+        turn_id: &str,
+        usage: ThreadTokenUsage,
+    ) -> Result<(), AgentError> {
+        let Some(events) = self.operation_sink(thread_id, Some(turn_id))? else {
+            return Ok(());
+        };
+        events.emit(AgentEvent::TokenUsageUpdated {
+            usage: ModelTokenUsageSnapshot {
+                total: Some(model_token_usage(usage.total)),
+                last: model_token_usage(usage.last),
+                model_context_window: usage.model_context_window,
+            },
+        })
+    }
+
+    fn update_tool_progress(
+        &self,
+        thread_id: &str,
+        turn_id: &str,
+        message: String,
+    ) -> Result<(), AgentError> {
+        let Some(events) = self.operation_sink(thread_id, Some(turn_id))? else {
+            return Ok(());
+        };
+        events.emit(AgentEvent::ToolProgress { message })
+    }
+
     fn replace_completed_text(
         &self,
         thread_id: &str,
@@ -623,7 +740,7 @@ impl CodexAgentInner {
         thread_id: &str,
         turn_id: &str,
         status: TurnStatus,
-        error_message: Option<String>,
+        turn_error: Option<TurnError>,
     ) -> Result<(), AgentError> {
         if status == TurnStatus::InProgress {
             return Ok(());
@@ -648,18 +765,27 @@ impl CodexAgentInner {
                         }),
                     },
                 })
-                .map_err(|error| error.to_string()),
-            TurnStatus::Interrupted => Err("Codex turn was interrupted".into()),
-            TurnStatus::Failed => Err(error_message.unwrap_or_else(|| "Codex turn failed".into())),
+                .map_err(|error| AgentError::Backend(error.to_string())),
+            TurnStatus::Interrupted => Err(AgentError::Backend(
+                "Codex turn was interrupted".to_string(),
+            )),
+            TurnStatus::Failed => Err(turn_error
+                .map(agent_error_from_turn)
+                .unwrap_or_else(|| AgentError::Backend("Codex turn failed".to_string()))),
             TurnStatus::InProgress => unreachable!(),
         };
         let _ = operation.completion.send(result);
         Ok(())
     }
 
-    fn fail_turn(&self, thread_id: &str, turn_id: &str, message: String) -> Result<(), AgentError> {
+    fn fail_turn(
+        &self,
+        thread_id: &str,
+        turn_id: &str,
+        error: AgentError,
+    ) -> Result<(), AgentError> {
         if let Some(operation) = self.take_operation(thread_id, turn_id)? {
-            let _ = operation.completion.send(Err(message));
+            let _ = operation.completion.send(Err(error));
         }
         Ok(())
     }
@@ -667,7 +793,9 @@ impl CodexAgentInner {
     fn fail_all(&self, message: &str) {
         if let Ok(mut operations) = self.operations.lock() {
             for (_, operation) in operations.drain() {
-                let _ = operation.completion.send(Err(message.to_string()));
+                let _ = operation
+                    .completion
+                    .send(Err(AgentError::Backend(message.to_string())));
             }
         }
     }
@@ -697,18 +825,48 @@ impl CodexAgentInner {
                     }
                     Ok(())
                 }
+                ServerNotification::ThreadTokenUsageUpdated(updated) => self.update_token_usage(
+                    &updated.thread_id,
+                    &updated.turn_id,
+                    updated.token_usage,
+                ),
+                ServerNotification::McpToolCallProgress(progress) => self.update_tool_progress(
+                    &progress.thread_id,
+                    &progress.turn_id,
+                    progress.message,
+                ),
                 ServerNotification::TurnCompleted(completed) => self.complete_turn(
                     &completed.thread_id,
                     &completed.turn.id,
                     completed.turn.status,
-                    completed.turn.error.map(|error| error.message),
+                    completed.turn.error,
                 ),
-                ServerNotification::Error(error) if !error.will_retry => {
-                    self.fail_turn(&error.thread_id, &error.turn_id, error.error.message)
-                }
+                ServerNotification::Error(error) if !error.will_retry => self.fail_turn(
+                    &error.thread_id,
+                    &error.turn_id,
+                    agent_error_from_turn(error.error),
+                ),
                 _ => Ok(()),
             },
         }
+    }
+}
+
+fn model_token_usage(usage: TokenUsageBreakdown) -> ModelTokenUsage {
+    ModelTokenUsage {
+        total_tokens: usage.total_tokens,
+        input_tokens: usage.input_tokens,
+        cached_input_tokens: usage.cached_input_tokens,
+        output_tokens: usage.output_tokens,
+        reasoning_output_tokens: usage.reasoning_output_tokens,
+    }
+}
+
+fn agent_error_from_turn(error: TurnError) -> AgentError {
+    if error.codex_error_info.as_ref() == Some(&CodexErrorInfo::UsageLimitExceeded) {
+        AgentError::UsageLimitExceeded(error.message)
+    } else {
+        AgentError::Backend(error.message)
     }
 }
 
@@ -745,8 +903,10 @@ impl CodexAgentBackend {
             ignore_user_and_project_exec_policy_rules: true,
             ..LoaderOverrides::default()
         };
+        let mut cli_overrides = bundled_plugin_overrides(&settings)?;
         let mut config = ConfigBuilder::default()
             .codex_home(settings.codex_home)
+            .cli_overrides(cli_overrides.clone())
             .loader_overrides(loader_overrides.clone())
             .harness_overrides(ConfigOverrides {
                 model: Some(settings.model.clone()),
@@ -801,7 +961,7 @@ impl CodexAgentBackend {
         // provider without writing credentials to config.toml.
         let provider_override = toml::Value::try_from(&provider)
             .map_err(|error| AgentError::Backend(error.to_string()))?;
-        let cli_overrides = vec![(format!("model_providers.{PROVIDER_ID}"), provider_override)];
+        cli_overrides.push((format!("model_providers.{PROVIDER_ID}"), provider_override));
 
         let config = Arc::new(config);
         let state_db = codex_core::init_state_db(config.as_ref()).await;
@@ -949,7 +1109,6 @@ impl AgentBackend for CodexAgentBackend {
         result
             .await
             .map_err(|_| AgentError::Backend("Codex turn dispatcher stopped".into()))?
-            .map_err(AgentError::Backend)
     }
 
     async fn interrupt(&self, operation_id: &OperationId) -> Result<(), AgentError> {
@@ -992,9 +1151,360 @@ impl AgentBackend for CodexAgentBackend {
             .map_err(|error| AgentError::Backend(error.to_string()))
     }
 
+    async fn open_mcp_app(&self, request: OpenMcpAppRequest) -> Result<McpAppSession, AgentError> {
+        let installed: PluginInstalledResponse = self
+            .inner
+            .requests
+            .request_typed(ClientRequest::PluginInstalled {
+                request_id: self.inner.request_id(),
+                params: PluginInstalledParams {
+                    cwds: Some(vec![self.inner.config.cwd.clone()]),
+                    install_suggestion_plugin_names: None,
+                },
+            })
+            .await
+            .map_err(|error| AgentError::Backend(error.to_string()))?;
+        let (marketplace_path, remote_marketplace_name) = installed
+            .marketplaces
+            .into_iter()
+            .find_map(|marketplace| {
+                marketplace
+                    .plugins
+                    .iter()
+                    .any(|plugin| plugin.id == request.plugin_id && plugin.installed)
+                    .then(|| {
+                        let remote_name = marketplace.path.is_none().then_some(marketplace.name);
+                        (marketplace.path, remote_name)
+                    })
+            })
+            .ok_or_else(|| {
+                AgentError::Backend(format!(
+                    "plugin `{}` is not installed in a Codex marketplace",
+                    request.plugin_id
+                ))
+            })?;
+        let detail: PluginReadResponse = self
+            .inner
+            .requests
+            .request_typed(ClientRequest::PluginRead {
+                request_id: self.inner.request_id(),
+                params: PluginReadParams {
+                    marketplace_path,
+                    remote_marketplace_name,
+                    plugin_name: request.plugin_id.clone(),
+                },
+            })
+            .await
+            .map_err(|error| AgentError::Backend(error.to_string()))?;
+        if !detail.plugin.summary.enabled {
+            return Err(AgentError::Backend(format!(
+                "plugin `{}` is disabled",
+                request.plugin_id
+            )));
+        }
+        let mcp_configs = self.inner.config.mcp_servers.get();
+        let selected = select_runtime_with_availability(
+            request.platform,
+            &detail.plugin.mcp_servers,
+            &detail.plugin.runtime_variants,
+            |server| mcp_configs.get(server).is_some_and(mcp_runtime_available),
+        )
+        .map_err(|error| AgentError::Backend(error.to_string()))?;
+        let (command_tools, tool_gates) = match &detail.plugin.summary.source {
+            PluginSource::Local { path } => LocalPlugin::load(path.as_path())
+                .map_err(|error| AgentError::Backend(error.to_string()))?
+                .mahayana
+                .map(|manifest| {
+                    let mut commands = HashMap::new();
+                    for command in manifest.commands {
+                        commands.insert(command.name, command.tool.clone());
+                        for alias in command.aliases {
+                            commands.insert(alias, command.tool.clone());
+                        }
+                    }
+                    let gates = manifest
+                        .gates
+                        .into_iter()
+                        .filter_map(|gate| {
+                            gate.target
+                                .strip_prefix("tool:")
+                                .map(|tool| (tool.to_string(), gate.entitlement))
+                        })
+                        .collect();
+                    (commands, gates)
+                })
+                .unwrap_or_default(),
+            PluginSource::Git { .. } | PluginSource::Npm { .. } | PluginSource::Remote => {
+                (HashMap::new(), HashMap::new())
+            }
+        };
+        let server_config = self
+            .inner
+            .config
+            .mcp_servers
+            .get()
+            .get(&selected.server)
+            .cloned()
+            .ok_or_else(|| {
+                AgentError::Backend(format!(
+                    "plugin `{}` selected MCP server `{}`, but Codex did not load its configuration",
+                    request.plugin_id, selected.server
+                ))
+            })?;
+        let mut config = HashMap::new();
+        config.insert(
+            "mcp_servers".into(),
+            serde_json::to_value(HashMap::from([(selected.server.clone(), server_config)]))
+                .map_err(|error| AgentError::Backend(error.to_string()))?,
+        );
+        config.insert("features".into(), json!({ "shell_tool": false }));
+        config.insert("web_search".into(), Value::String("disabled".into()));
+        let response: ThreadStartResponse = self
+            .inner
+            .requests
+            .request_typed(ClientRequest::ThreadStart {
+                request_id: self.inner.request_id(),
+                params: ThreadStartParams {
+                    model: self.inner.config.model.clone(),
+                    model_provider: Some(self.inner.config.model_provider_id.clone()),
+                    cwd: Some(self.inner.config.cwd.to_string_lossy().into_owned()),
+                    runtime_workspace_roots: Some(Vec::new()),
+                    approval_policy: Some(
+                        self.inner.config.permissions.approval_policy.value().into(),
+                    ),
+                    sandbox: Some(SandboxMode::ReadOnly.into()),
+                    config: Some(config),
+                    base_instructions: Some(format!(
+                        "你在插件 `{}` 的隔离 MCP 小程序会话中。只能使用 Server `{}` 提供的 MCP Tools；不得使用 shell、文件系统、其他插件或其他 MCP Server。",
+                        request.plugin_id, selected.server
+                    )),
+                    developer_instructions: Some(
+                        "普通文本应通过当前 MCP Tools 完成；所有副作用都服从 MCP annotations 和宿主审批。".into(),
+                    ),
+                    ephemeral: Some(false),
+                    environments: Some(Vec::new()),
+                    dynamic_tools: Some(Vec::new()),
+                    ..ThreadStartParams::default()
+                },
+            })
+            .await
+            .map_err(|error| AgentError::Backend(error.to_string()))?;
+        let thread_id = AgentThreadId::new(response.thread.id)
+            .map_err(|error| AgentError::Backend(error.to_string()))?;
+        let tools = self
+            .list_mcp_app_tools(&thread_id, &selected.server)
+            .await?;
+        if let Some((command, tool)) = command_tools.iter().find(|(_, tool)| {
+            !tools
+                .iter()
+                .any(|descriptor| descriptor.get("name").and_then(Value::as_str) == Some(tool))
+        }) {
+            return Err(AgentError::Backend(format!(
+                "plugin command `{command}` maps to missing MCP Tool `{tool}`"
+            )));
+        }
+        let has_home = tools
+            .iter()
+            .any(|tool| tool.get("name").and_then(Value::as_str) == Some("home"));
+        let home_result = if has_home {
+            self.call_mcp_app_tool(&thread_id, &selected.server, "home", json!({}))
+                .await?
+        } else {
+            Value::Null
+        };
+        let resource_uri = home_result
+            .pointer("/_meta/ui~1resourceUri")
+            .or_else(|| home_result.pointer("/meta/ui~1resourceUri"))
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        let ui_resources = if let Some(uri) = resource_uri {
+            let resources: McpResourceReadResponse = self
+                .inner
+                .requests
+                .request_typed(ClientRequest::McpResourceRead {
+                    request_id: self.inner.request_id(),
+                    params: McpResourceReadParams {
+                        thread_id: Some(thread_id.to_string()),
+                        server: selected.server.clone(),
+                        uri,
+                    },
+                })
+                .await
+                .map_err(|error| AgentError::Backend(error.to_string()))?;
+            resources
+                .contents
+                .into_iter()
+                .map(|content| {
+                    serde_json::to_value(content)
+                        .map_err(|error| AgentError::Backend(error.to_string()))
+                })
+                .collect::<Result<Vec<_>, _>>()?
+        } else {
+            Vec::new()
+        };
+        Ok(McpAppSession {
+            thread_id,
+            plugin_id: request.plugin_id,
+            server: selected.server,
+            command_tools,
+            tool_gates,
+            tools,
+            home_result,
+            ui_resources,
+        })
+    }
+
+    async fn list_mcp_app_tools(
+        &self,
+        thread_id: &AgentThreadId,
+        server: &str,
+    ) -> Result<Vec<Value>, AgentError> {
+        let response: ListMcpServerStatusResponse = self
+            .inner
+            .requests
+            .request_typed(ClientRequest::McpServerStatusList {
+                request_id: self.inner.request_id(),
+                params: ListMcpServerStatusParams {
+                    cursor: None,
+                    limit: None,
+                    detail: Some(McpServerStatusDetail::Full),
+                    thread_id: Some(thread_id.to_string()),
+                },
+            })
+            .await
+            .map_err(|error| AgentError::Backend(error.to_string()))?;
+        let status = response
+            .data
+            .into_iter()
+            .find(|status| status.name == server)
+            .ok_or_else(|| {
+                AgentError::Backend(format!("MCP App server `{server}` was not initialized"))
+            })?;
+        let mut tools = status
+            .tools
+            .into_values()
+            .map(|tool| {
+                serde_json::to_value(tool).map_err(|error| AgentError::Backend(error.to_string()))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        tools.sort_by(|left, right| {
+            left.get("name")
+                .and_then(Value::as_str)
+                .cmp(&right.get("name").and_then(Value::as_str))
+        });
+        Ok(tools)
+    }
+
+    async fn read_mcp_app_resource(
+        &self,
+        thread_id: &AgentThreadId,
+        server: &str,
+        uri: &str,
+    ) -> Result<Vec<Value>, AgentError> {
+        let resources: McpResourceReadResponse = self
+            .inner
+            .requests
+            .request_typed(ClientRequest::McpResourceRead {
+                request_id: self.inner.request_id(),
+                params: McpResourceReadParams {
+                    thread_id: Some(thread_id.to_string()),
+                    server: server.to_string(),
+                    uri: uri.to_string(),
+                },
+            })
+            .await
+            .map_err(|error| AgentError::Backend(error.to_string()))?;
+        resources
+            .contents
+            .into_iter()
+            .map(|content| {
+                serde_json::to_value(content)
+                    .map_err(|error| AgentError::Backend(error.to_string()))
+            })
+            .collect()
+    }
+
+    async fn call_mcp_app_tool(
+        &self,
+        thread_id: &AgentThreadId,
+        server: &str,
+        tool: &str,
+        arguments: Value,
+    ) -> Result<Value, AgentError> {
+        let response: McpServerToolCallResponse = self
+            .inner
+            .requests
+            .request_typed(ClientRequest::McpServerToolCall {
+                request_id: self.inner.request_id(),
+                params: McpServerToolCallParams {
+                    thread_id: thread_id.to_string(),
+                    server: server.into(),
+                    tool: tool.into(),
+                    arguments: Some(arguments),
+                    meta: None,
+                },
+            })
+            .await
+            .map_err(|error| AgentError::Backend(error.to_string()))?;
+        serde_json::to_value(response).map_err(|error| AgentError::Backend(error.to_string()))
+    }
+
     fn name(&self) -> &'static str {
         "codex-app-server-in-process"
     }
+}
+
+fn mcp_runtime_available(config: &McpServerConfig) -> bool {
+    if !config.enabled || config.disabled_reason.is_some() {
+        return false;
+    }
+    match &config.transport {
+        McpServerTransportConfig::StreamableHttp { .. } => true,
+        McpServerTransportConfig::Stdio { command, .. } => command_available(command),
+    }
+}
+
+fn command_available(command: &str) -> bool {
+    let path = Path::new(command);
+    if path.is_absolute() || path.components().count() > 1 {
+        return executable_file(path);
+    }
+    std::env::var_os("PATH").is_some_and(|search_path| {
+        std::env::split_paths(&search_path).any(|directory| {
+            let candidate = directory.join(command);
+            if executable_file(&candidate) {
+                return true;
+            }
+            #[cfg(windows)]
+            {
+                return std::env::var_os("PATHEXT").is_some_and(|extensions| {
+                    extensions.to_string_lossy().split(';').any(|extension| {
+                        executable_file(
+                            &candidate.with_extension(extension.trim_start_matches('.')),
+                        )
+                    })
+                });
+            }
+            #[cfg(not(windows))]
+            false
+        })
+    })
+}
+
+fn executable_file(path: &Path) -> bool {
+    let Ok(metadata) = path.metadata() else {
+        return false;
+    };
+    if !metadata.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        metadata.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    true
 }
 
 fn mahayana_dynamic_tools() -> Vec<DynamicToolSpec> {
@@ -1160,6 +1670,8 @@ mod tests {
     fn accepts_anonymous_product_session_for_first_party_allowance() {
         let config = CodexAgentConfig {
             codex_home: PathBuf::from("/tmp/mahayana-test"),
+            bundled_plugin_marketplace: None,
+            bundled_plugin_ids: Vec::new(),
             cwd: PathBuf::from("/tmp"),
             workspace_roots: Vec::new(),
             model: "deepseek-chat".into(),
@@ -1177,6 +1689,8 @@ mod tests {
     fn rejects_non_https_provider_and_header_injection() {
         let mut config = CodexAgentConfig {
             codex_home: PathBuf::from("/tmp/mahayana-test"),
+            bundled_plugin_marketplace: None,
+            bundled_plugin_ids: Vec::new(),
             cwd: PathBuf::from("/tmp"),
             workspace_roots: Vec::new(),
             model: "deepseek-chat".into(),
@@ -1191,5 +1705,32 @@ mod tests {
         config.responses_base_url = "https://example.test/v1".into();
         config.product_session_token = Some("secret\nInjected: yes".into());
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn bundled_official_marketplace_is_projected_into_memory_only() {
+        let marketplace =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../../.agents/plugins");
+        let config = CodexAgentConfig {
+            codex_home: PathBuf::from("/tmp/mahayana-test"),
+            bundled_plugin_marketplace: Some(marketplace),
+            bundled_plugin_ids: vec!["global-dharma".into(), "faliu-flashcards".into()],
+            cwd: PathBuf::from("/tmp"),
+            workspace_roots: Vec::new(),
+            model: "deepseek-chat".into(),
+            responses_base_url: "https://example.test/v1".into(),
+            product_session_token: None,
+            sandbox_mode: SandboxMode::ReadOnly,
+            approval_policy: AskForApproval::OnRequest,
+            codex_executable_path: None,
+            conversation_providers: Vec::new(),
+        };
+        let overrides = bundled_plugin_overrides(&config).expect("bundled plugin overrides");
+        assert!(overrides.iter().any(|(key, _)| key == "features.plugins"));
+        assert!(
+            overrides
+                .iter()
+                .any(|(key, _)| { key == "plugins.\"global-dharma@fabushi-official\".enabled" })
+        );
     }
 }

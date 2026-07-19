@@ -1,0 +1,24 @@
+[package]
+name = "fabushi-official-miniapps"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "One Rust core for Fabushi official Mini Apps, desktop CLI/MCP, and WebAssembly."
+publish = false
+
+[lib]
+name = "fabushi_official_miniapps"
+path = "src/lib.rs"
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "fabushi-plugin-cli"
+path = "src/main.rs"
+
+[dependencies]
+mahayana-miniapp-protocol.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen.workspace = true

@@ -5,8 +5,9 @@ import type { AbsolutePathBuf } from "../AbsolutePathBuf";
 import type { AppSummary } from "./AppSummary";
 import type { AppTemplateSummary } from "./AppTemplateSummary";
 import type { PluginHookSummary } from "./PluginHookSummary";
+import type { PluginRuntimeVariant } from "./PluginRuntimeVariant";
 import type { PluginSummary } from "./PluginSummary";
 import type { ScheduledTaskSummary } from "./ScheduledTaskSummary";
 import type { SkillSummary } from "./SkillSummary";
 
-export type PluginDetail = { marketplaceName: string, marketplacePath: AbsolutePathBuf | null, summary: PluginSummary, shareUrl: string | null, description: string | null, skills: Array<SkillSummary>, hooks: Array<PluginHookSummary>, apps: Array<AppSummary>, appTemplates: Array<AppTemplateSummary>, mcpServers: Array<string>, scheduledTasks: Array<ScheduledTaskSummary> | null, };
+export type PluginDetail = { marketplaceName: string, marketplacePath: AbsolutePathBuf | null, summary: PluginSummary, shareUrl: string | null, description: string | null, skills: Array<SkillSummary>, hooks: Array<PluginHookSummary>, apps: Array<AppSummary>, appTemplates: Array<AppTemplateSummary>, mcpServers: Array<string>, runtimeVariants: Array<PluginRuntimeVariant>, scheduledTasks: Array<ScheduledTaskSummary> | null, };

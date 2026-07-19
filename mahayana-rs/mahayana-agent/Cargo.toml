@@ -9,5 +9,6 @@ publish = false
 [dependencies]
 async-trait.workspace = true
 mahayana-core.workspace = true
+mahayana-platform-core.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

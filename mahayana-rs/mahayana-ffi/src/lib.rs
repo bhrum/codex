@@ -9,13 +9,14 @@ use mahayana_agent_codex::CodexAgentConfig;
 use mahayana_conversation::ConversationProvider;
 use mahayana_core::ApprovalDecision;
 use mahayana_core::ApprovalId;
-#[cfg(any(feature = "desktop-full", feature = "mobile-embedded"))]
 use mahayana_core::BuildProfile;
 use mahayana_core::OperationId;
 use mahayana_core::RuntimeCommand;
 use mahayana_core::RuntimeConfig;
+use mahayana_miniapp::EntitlementChecker;
 use mahayana_miniapp::MiniAppConversationProvider;
 use mahayana_miniapp::MiniAppDefinition;
+use mahayana_platform_core::HostPlatform;
 use mahayana_product::MahayanaProductClient;
 #[cfg(feature = "desktop-full")]
 use mahayana_product::default_mahayana_home;
@@ -51,12 +52,11 @@ thread_local! {
 struct RuntimeCreateConfig {
     #[serde(flatten)]
     runtime: RuntimeConfig,
-    /// Optional in-memory override supplied by a platform secure-storage
-    /// bridge. This value is consumed during creation and never retained in
-    /// the serializable runtime status/config contract.
-    product_session_token: Option<String>,
     product_session_path: Option<PathBuf>,
     codex_home: Option<PathBuf>,
+    /// Read-only marketplace shipped inside the desktop application. Its
+    /// plugin directories contain the matching native CLI and WASM artifacts.
+    bundled_plugin_marketplace: Option<PathBuf>,
     /// Optional Mahayana CLI executable that supports desktop argv helper
     /// dispatch. SDK hosts omit it and use in-process Mahayana workspace tools.
     codex_executable_path: Option<PathBuf>,
@@ -64,6 +64,7 @@ struct RuntimeCreateConfig {
     /// Existing embedded Telegram client created by the platform login flow.
     telegram_client_id: Option<u64>,
     telegram_self_user_id: Option<i64>,
+    host_platform: Option<HostPlatform>,
     mini_apps: Vec<MiniAppDefinition>,
 }
 
@@ -110,25 +111,29 @@ fn build_runtime(create: RuntimeCreateConfig) -> Result<MahayanaRuntime, String>
         build_profile: BuildProfile::MobileEmbedded,
         ..runtime_config
     };
-    let mini_apps = if create.mini_apps.is_empty() {
-        default_mini_apps()
-    } else {
-        create.mini_apps.clone()
-    };
+    let host_platform = create
+        .host_platform
+        .unwrap_or(match runtime_config.build_profile {
+            BuildProfile::DesktopFull => HostPlatform::Desktop,
+            BuildProfile::MobileEmbedded => HostPlatform::Mobile,
+            BuildProfile::WebWasm => HostPlatform::Web,
+        });
     let product_client = create
         .product_session_path
         .map(|path| MahayanaProductClient::new("https://api.ombhrum.com", path))
         .unwrap_or_default();
-    let session_token = create
-        .product_session_token
-        .filter(|value| !value.trim().is_empty())
-        .or_else(|| product_client.session_token().ok());
+    let mini_apps = if create.mini_apps.is_empty() {
+        discover_mini_apps(&product_client).unwrap_or_else(default_mini_apps)
+    } else {
+        create.mini_apps.clone()
+    };
+    let session_token = product_client.session_token().ok();
     let mut builder = RuntimeBuilder::new(runtime_config.clone());
     #[cfg(any(feature = "desktop-full", feature = "mobile-embedded"))]
     let mut codex_conversation_providers: Vec<Arc<dyn ConversationProvider>> = Vec::new();
     if let Some(token) = session_token.as_ref() {
         let provider = Arc::new(MahayanaSocialConversationProvider::new(
-            product_client,
+            product_client.clone(),
             Some(token.clone()),
         ));
         #[cfg(any(feature = "desktop-full", feature = "mobile-embedded"))]
@@ -181,6 +186,8 @@ fn build_runtime(create: RuntimeCreateConfig) -> Result<MahayanaRuntime, String>
             .ok_or_else(|| "Dacheng Responses base URL is required".to_string())?;
         let settings = CodexAgentConfig {
             codex_home,
+            bundled_plugin_marketplace: create.bundled_plugin_marketplace,
+            bundled_plugin_ids: mini_apps.iter().map(|app| app.plugin_id.clone()).collect(),
             cwd,
             workspace_roots,
             model: runtime_config.model.model.clone(),
@@ -198,7 +205,14 @@ fn build_runtime(create: RuntimeCreateConfig) -> Result<MahayanaRuntime, String>
                     Ok(Arc::new(backend) as Arc<dyn mahayana_agent::AgentBackend>)
                 },
                 move |builder, backend| {
-                    let provider = MiniAppConversationProvider::new(backend, mini_apps)?;
+                    let provider = MiniAppConversationProvider::new_for_platform_with_entitlements(
+                        backend,
+                        mini_apps,
+                        host_platform,
+                        Some(Arc::new(PlatformEntitlementChecker {
+                            client: product_client,
+                        })),
+                    )?;
                     builder.with_provider(Arc::new(provider))
                 },
             )
@@ -208,8 +222,15 @@ fn build_runtime(create: RuntimeCreateConfig) -> Result<MahayanaRuntime, String>
     let unavailable_reason = "this platform build has no embedded Codex backend";
     let backend: Arc<dyn mahayana_agent::AgentBackend> =
         Arc::new(UnavailableAgentBackend::new(unavailable_reason));
-    let miniapp = MiniAppConversationProvider::new(Arc::clone(&backend), mini_apps)
-        .map_err(|error| error.to_string())?;
+    let miniapp = MiniAppConversationProvider::new_for_platform_with_entitlements(
+        Arc::clone(&backend),
+        mini_apps,
+        host_platform,
+        Some(Arc::new(PlatformEntitlementChecker {
+            client: product_client,
+        })),
+    )
+    .map_err(|error| error.to_string())?;
     builder
         .with_agent_backend(backend)
         .map_err(|error| error.to_string())?
@@ -221,40 +242,43 @@ fn build_runtime(create: RuntimeCreateConfig) -> Result<MahayanaRuntime, String>
 
 fn default_mini_apps() -> Vec<MiniAppDefinition> {
     [
-        (
-            "official.global-dharma",
-            "全球法布施",
-            "协助准备、检查和发送全球法布施内容。",
-        ),
-        (
-            "official.flashcards",
-            "法流背诵卡",
-            "帮助用户复习和制作佛经背诵卡。",
-        ),
-        (
-            "official.platform-publish",
-            "平台发布",
-            "协助整理并发布自媒体内容，敏感操作必须请求确认。",
-        ),
-        (
-            "official.bot-father",
-            "机器人之父",
-            "根据用户描述开发、修改和调试大乘个人沙箱小程序。优先使用内置文件工具直接在当前工作区创建或更新 index.html；生成物必须是完整、自包含、少于 1800 个字符的单文件 HTML，HTML 从 <!DOCTYPE html> 开始并以 </html> 结束，CSS 和 JavaScript 内联。完成文件修改后简要说明结果。只有文件工具确实不可用时，才直接回复 HTML 源码且不使用 Markdown 围栏。",
-        ),
-        (
-            "official.assistant",
-            "大乘助手",
-            "提供大乘软件功能引导和日常协助。",
-        ),
+        ("global-dharma", "全球法布施"),
+        ("faliu-flashcards", "法流记忆卡"),
+        ("platform-publish", "平台发布"),
+        ("hermes-installer", "Hermes 安装器"),
+        ("bot-father", "Bot Father"),
+        ("mahayana-assistant", "大乘助手"),
     ]
     .into_iter()
-    .map(|(app_id, title, instructions)| MiniAppDefinition {
-        app_id: app_id.into(),
+    .map(|(plugin_id, title)| MiniAppDefinition {
+        plugin_id: plugin_id.into(),
         title: title.into(),
-        instructions: instructions.into(),
         pinned: false,
     })
     .collect()
+}
+
+fn discover_mini_apps(client: &MahayanaProductClient) -> Option<Vec<MiniAppDefinition>> {
+    let registry = client
+        .execute("mahayana.miniapps.registry", &json!({}))
+        .ok()?;
+    let plugins = registry.get("plugins")?.as_array()?;
+    let definitions = plugins
+        .iter()
+        .filter_map(|plugin| {
+            let id = plugin.get("id")?.as_str()?.trim();
+            let title = plugin.get("title")?.as_str()?.trim();
+            if id.is_empty() || title.is_empty() {
+                return None;
+            }
+            Some(MiniAppDefinition {
+                plugin_id: id.to_string(),
+                title: title.to_string(),
+                pinned: false,
+            })
+        })
+        .collect::<Vec<_>>();
+    (!definitions.is_empty()).then_some(definitions)
 }
 
 #[cfg(feature = "desktop-full")]
@@ -407,7 +431,7 @@ pub unsafe extern "C" fn mahayana_product_execute(request_json: *const c_char) -
 }
 
 /// Linker anchor for Flutter builds that load the shared Mahayana library and
-/// resolve the legacy Telegram/mini-app host symbols from that same artifact.
+/// resolve the Telegram symbols from that same artifact.
 #[unsafe(no_mangle)]
 pub extern "C" fn mahayana_runtime_force_link() -> u32 {
     let runtime_symbols = [
@@ -427,15 +451,7 @@ pub extern "C" fn mahayana_runtime_force_link() -> u32 {
         fabushi_telegram_runtime::fabushi_telegram_close_client as *const () as usize,
         fabushi_telegram_runtime::fabushi_telegram_free_string as *const () as usize,
     ];
-    let miniapp_symbols = [
-        fabushi_miniapp_runtime::fabushi_runtime_create_client as *const () as usize,
-        fabushi_miniapp_runtime::fabushi_runtime_send as *const () as usize,
-        fabushi_miniapp_runtime::fabushi_runtime_receive as *const () as usize,
-        fabushi_miniapp_runtime::fabushi_runtime_execute as *const () as usize,
-        fabushi_miniapp_runtime::fabushi_runtime_close as *const () as usize,
-        fabushi_miniapp_runtime::fabushi_runtime_free_string as *const () as usize,
-    ];
-    std::hint::black_box((runtime_symbols, telegram_symbols, miniapp_symbols));
+    std::hint::black_box((runtime_symbols, telegram_symbols));
     1
 }
 
@@ -557,5 +573,23 @@ mod tests {
                 .expect("error message")
                 .contains("remote Agent")
         );
+    }
+}
+#[derive(Clone)]
+struct PlatformEntitlementChecker {
+    client: MahayanaProductClient,
+}
+
+#[async_trait::async_trait]
+impl EntitlementChecker for PlatformEntitlementChecker {
+    async fn has_entitlement(&self, plugin_id: &str, capability: &str) -> Result<bool, String> {
+        let client = self.client.clone();
+        let plugin_id = plugin_id.to_string();
+        let capability = capability.to_string();
+        tokio::task::spawn_blocking(move || client.entitlement(&plugin_id, &capability))
+            .await
+            .map_err(|error| error.to_string())?
+            .map(|entitlement| entitlement.is_some())
+            .map_err(|error| error.to_string())
     }
 }

@@ -10,6 +10,6 @@ async-trait.workspace = true
 chrono.workspace = true
 mahayana-conversation.workspace = true
 mahayana-core.workspace = true
-mahayana-product = { path = "../mahayana-product" }
+mahayana-product = { package = "mahayana-platform-client", path = "../mahayana-product" }
 serde_json.workspace = true
 tokio.workspace = true
