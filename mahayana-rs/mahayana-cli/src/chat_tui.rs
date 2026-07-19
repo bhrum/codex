@@ -278,13 +278,18 @@ fn pick_conversation(
             }
         }
         let current_messages = if !conversations.is_empty() {
-            history_cache.get(&conversations[selected].id).map(|m| m.as_slice()).unwrap_or(&[])
+            history_cache
+                .get(&conversations[selected].id)
+                .map(|m| m.as_slice())
+                .unwrap_or(&[])
         } else {
             &[]
         };
 
         terminal
-            .draw(|frame| render_conversation_picker(frame, conversations, selected, current_messages))
+            .draw(|frame| {
+                render_conversation_picker(frame, conversations, selected, current_messages)
+            })
             .map_err(|error| error.to_string())?;
         match event::read().map_err(|error| error.to_string())? {
             Event::Key(key) if is_key_press(key) => match key.code {
@@ -321,18 +326,12 @@ fn render_conversation_picker(
     let area = frame.area();
     let main_rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Min(3),
-            Constraint::Length(1),
-        ])
+        .constraints([Constraint::Min(3), Constraint::Length(1)])
         .split(area);
 
     let columns = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(38),
-            Constraint::Percentage(62),
-        ])
+        .constraints([Constraint::Percentage(38), Constraint::Percentage(62)])
         .split(main_rows[0]);
 
     // 左半区：联系人选单
@@ -372,7 +371,10 @@ fn render_conversation_picker(
 
     // 右半区：当前会话的对话内容预览
     let (selected_title, lines) = if let Some(conv) = conversations.get(selected) {
-        (conv.title.as_str(), transcript_lines(conv, current_messages, false, Instant::now()))
+        (
+            conv.title.as_str(),
+            transcript_lines(conv, current_messages, false, Instant::now()),
+        )
     } else {
         ("无", Vec::new())
     };
@@ -1347,6 +1349,9 @@ mod tests {
         assert!(compact.contains("全球法布施"), "{snapshot}");
         assert!(compact.contains("法流记忆卡"), "{snapshot}");
         assert!(compact.contains("开始与全球法布施对话"), "{snapshot}");
-        assert!(compact.contains("↑↓/jk切换联系人Enter进入完整对话Esc/q退出"), "{snapshot}");
+        assert!(
+            compact.contains("↑↓/jk切换联系人Enter进入完整对话Esc/q退出"),
+            "{snapshot}"
+        );
     }
 }
