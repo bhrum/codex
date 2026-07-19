@@ -291,6 +291,9 @@ fn normalize_plugin_mcp_server_value(
         && relative_plugin_command(command)
     {
         ensure_plugin_relative_path(command, "command")?;
+        #[cfg(windows)]
+        let mut resolved = root.join(command);
+        #[cfg(not(windows))]
         let resolved = root.join(command);
         #[cfg(windows)]
         if !resolved.is_file() && resolved.extension().is_none() {
