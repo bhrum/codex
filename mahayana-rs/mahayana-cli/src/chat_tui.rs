@@ -672,13 +672,13 @@ fn send_in_chat(
                             }
                         }
                     }
-                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        if !interrupted {
-                            interrupted = true;
-                            if let Err(error) = runtime.interrupt(&operation_id) {
-                                push_error(messages, error);
-                                return Ok(());
-                            }
+                    KeyCode::Char('c')
+                        if key.modifiers.contains(KeyModifiers::CONTROL) && !interrupted =>
+                    {
+                        interrupted = true;
+                        if let Err(error) = runtime.interrupt(&operation_id) {
+                            push_error(messages, error);
+                            return Ok(());
                         }
                     }
                     _ => {}
