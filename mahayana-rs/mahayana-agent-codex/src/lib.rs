@@ -1477,13 +1477,13 @@ fn command_available(command: &str) -> bool {
             }
             #[cfg(windows)]
             {
-                return std::env::var_os("PATHEXT").is_some_and(|extensions| {
+                std::env::var_os("PATHEXT").is_some_and(|extensions| {
                     extensions.to_string_lossy().split(';').any(|extension| {
                         executable_file(
                             &candidate.with_extension(extension.trim_start_matches('.')),
                         )
                     })
-                });
+                })
             }
             #[cfg(not(windows))]
             false
