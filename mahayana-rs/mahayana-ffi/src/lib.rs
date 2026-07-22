@@ -24,6 +24,7 @@ use mahayana_product::MahayanaProductClient;
 use mahayana_product::default_mahayana_home;
 use mahayana_runtime_core::MahayanaRuntime;
 use mahayana_runtime_core::RuntimeBuilder;
+use mahayana_runtime_core::RuntimeError;
 use mahayana_social::MahayanaSocialConversationProvider;
 use mahayana_telegram::TelegramConversationProvider;
 use once_cell::sync::Lazy;
@@ -113,6 +114,9 @@ pub unsafe extern "C" fn mahayana_runtime_create(config_json: *const c_char) -> 
 
 fn build_runtime(create: RuntimeCreateConfig) -> Result<MahayanaRuntime, String> {
     let runtime_config = create.runtime.clone();
+    if runtime_config.remote_agent_enabled {
+        return Err(RuntimeError::RemoteAgentForbidden.to_string());
+    }
     #[cfg(all(feature = "mobile-embedded", not(feature = "desktop-full")))]
     let runtime_config = RuntimeConfig {
         build_profile: BuildProfile::MobileEmbedded,
