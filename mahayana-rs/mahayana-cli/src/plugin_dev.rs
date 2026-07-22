@@ -1,12 +1,214 @@
 use super::plugin_dev_template::template_files;
-use mahayana_miniapp_protocol::{
-    AppSummary, CompiledContent, ContentCompiler, ContentSource, SourceKind,
-};
+use codex_core_plugins::plugin_bundle_archive::unpack_plugin_bundle_tar_gz;
+use mahayana_miniapp_protocol::AppSummary;
+use mahayana_miniapp_protocol::CompiledContent;
+use mahayana_miniapp_protocol::ContentCompiler;
+use mahayana_miniapp_protocol::ContentSource;
+use mahayana_miniapp_protocol::SourceKind;
+use mahayana_platform_core::HostPlatform;
 use mahayana_plugin_host::LocalPlugin;
-use serde_json::{Value, json};
+use serde_json::Value;
+use serde_json::json;
 use std::fs;
-use std::path::{Component, Path, PathBuf};
+use std::path::Component;
+use std::path::Path;
+use std::path::PathBuf;
 use std::process::Command;
+
+pub use super::plugin_dev_template::PluginTemplate;
+
+const SITE_DISTRIBUTION_DIR: &str = ".mahayana-distribution";
+
+pub fn supported_marketplace_platforms(plugin_path: &Path) -> Result<Vec<String>, String> {
+    let plugin = LocalPlugin::load(plugin_path).map_err(|error| error.to_string())?;
+    if let Some(extension) = plugin.mahayana
+        && !extension.supported_platforms.is_empty()
+    {
+        return Ok(extension
+            .supported_platforms
+            .into_iter()
+            .map(|platform| match platform {
+                HostPlatform::Cli => "cli",
+                HostPlatform::Desktop => "desktop",
+                HostPlatform::Mobile => "mobile",
+                HostPlatform::Web => "web",
+            })
+            .map(str::to_string)
+            .collect());
+    }
+    let manifest: Value = serde_json::from_str(
+        &fs::read_to_string(plugin_path.join(".codex-plugin/plugin.json"))
+            .map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    let variants = manifest
+        .get("runtimeVariants")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "plugin runtimeVariants must be an array".to_string())?;
+    let mut platforms = Vec::new();
+    for platform in variants
+        .iter()
+        .filter_map(|variant| variant.get("platforms").and_then(Value::as_array))
+        .flatten()
+        .filter_map(Value::as_str)
+    {
+        if matches!(platform, "cli" | "desktop" | "mobile" | "web")
+            && !platforms.iter().any(|existing| existing == platform)
+        {
+            platforms.push(platform.to_string());
+        }
+    }
+    if platforms.is_empty() {
+        return Err("plugin does not declare a supported marketplace platform".into());
+    }
+    Ok(platforms)
+}
+
+pub fn install_marketplace_bundle(
+    repository: &Path,
+    plugin_id: &str,
+    version: &str,
+    archive: &[u8],
+) -> Result<Value, String> {
+    let repository = absolute_path(repository)?;
+    let plugin_id = normalized_name(plugin_id)?;
+    let plugins_root = repository.join(".agents/plugins/plugins");
+    let destination = plugins_root.join(&plugin_id);
+    if destination.exists() {
+        return Err(format!(
+            "插件 {plugin_id} 已安装；请先明确卸载或使用更新流程"
+        ));
+    }
+    fs::create_dir_all(&plugins_root).map_err(|error| error.to_string())?;
+    let staging = plugins_root.join(format!(".install-{}-{}", plugin_id, uuid::Uuid::new_v4()));
+    let result = (|| {
+        unpack_plugin_bundle_tar_gz(archive, &staging, 100 * 1024 * 1024)
+            .map_err(|error| error.to_string())?;
+        let validation = validate_plugin(&staging)?;
+        fs::rename(&staging, &destination).map_err(|error| error.to_string())?;
+        update_marketplace(
+            &repository.join(".agents/plugins/marketplace.json"),
+            &plugin_id,
+        )?;
+        Ok(json!({
+            "installed": true,
+            "pluginId": plugin_id,
+            "version": version,
+            "source": "independent-pages-or-worker",
+            "pluginRoot": destination,
+            "validation": validation,
+        }))
+    })();
+    if result.is_err() && staging.exists() {
+        let _ = fs::remove_dir_all(&staging);
+    }
+    if result.is_err() && destination.exists() {
+        let _ = fs::remove_dir_all(&destination);
+    }
+    result
+}
+
+pub fn prepare_site_distribution(
+    plugin_path: &Path,
+    plugin_id: &str,
+    version: &str,
+    package_sha256: &str,
+    archive: &[u8],
+) -> Result<PathBuf, String> {
+    let wrangler = fs::read_to_string(plugin_path.join("wrangler.toml"))
+        .map_err(|_| "插件必须包含 wrangler.toml 才能作为独立 Worker/Pages 发布".to_string())?;
+    if !wrangler.contains(SITE_DISTRIBUTION_DIR) {
+        return Err(format!(
+            "wrangler.toml 必须声明 [assets] directory = \"{SITE_DISTRIBUTION_DIR}\""
+        ));
+    }
+    let distribution = plugin_path.join(SITE_DISTRIBUTION_DIR);
+    let mahayana = distribution.join("mahayana");
+    fs::create_dir_all(&mahayana).map_err(|error| error.to_string())?;
+    fs::write(mahayana.join("plugin.tar.gz"), archive).map_err(|error| error.to_string())?;
+    let manifest = json!({
+        "schemaVersion": 1,
+        "pluginId": plugin_id,
+        "version": version,
+        "packagePath": "/mahayana/plugin.tar.gz",
+        "packageSha256": package_sha256,
+        "packageSize": archive.len(),
+        "runtime": "independent-worker-or-pages",
+    });
+    fs::write(
+        mahayana.join("plugin.json"),
+        serde_json::to_vec_pretty(&manifest).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    let title = escape_html(plugin_id);
+    let version = escape_html(version);
+    let html = format!(
+        "<!doctype html><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\"><title>{title} · 大乘插件</title><main style=\"font:16px system-ui;max-width:680px;margin:12vh auto;padding:24px\"><h1>{title}</h1><p>独立部署的大乘插件，版本 {version}。</p><p><a href=\"/mahayana/plugin.tar.gz\">下载并安装插件内容</a></p><p><a href=\"/mahayana/plugin.json\">查看可验证清单</a></p></main>"
+    );
+    fs::write(distribution.join("index.html"), html).map_err(|error| error.to_string())?;
+    Ok(distribution)
+}
+
+pub fn deploy_plugin_site(plugin_path: &Path) -> Result<String, String> {
+    let package: Value = serde_json::from_str(
+        &fs::read_to_string(plugin_path.join("package.json")).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    if package
+        .pointer("/scripts/deploy")
+        .and_then(Value::as_str)
+        .is_none()
+    {
+        return Err("插件 package.json 必须声明 deploy 脚本".into());
+    }
+    let output = Command::new("npm")
+        .args(["run", "deploy"])
+        .current_dir(plugin_path)
+        .output()
+        .map_err(|error| format!("failed to start plugin deployment: {error}"))?;
+    let combined = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    if !output.status.success() {
+        return Err(format!("插件 Worker/Pages 部署失败：{}", combined.trim()));
+    }
+    deployment_url_from_output(&combined).ok_or_else(|| {
+        "部署成功但未返回可验证的 workers.dev/pages.dev HTTPS 地址；请用 --deployment-url 指定"
+            .to_string()
+    })
+}
+
+fn deployment_url_from_output(output: &str) -> Option<String> {
+    output.split_whitespace().find_map(|word| {
+        let candidate = word.trim_matches(|character: char| {
+            matches!(
+                character,
+                '`' | '\'' | '"' | '(' | ')' | '[' | ']' | ',' | ';'
+            )
+        });
+        let mut url = url::Url::parse(candidate).ok()?;
+        let host = url.host_str()?.to_ascii_lowercase();
+        if url.scheme() != "https"
+            || !(host.ends_with(".workers.dev") || host.ends_with(".pages.dev"))
+        {
+            return None;
+        }
+        let path = url.path().trim_end_matches('/').to_string();
+        url.set_path(&path);
+        Some(url.to_string().trim_end_matches('/').to_string())
+    })
+}
+
+fn escape_html(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+}
 
 pub struct RemoteRepository {
     pub marketplace: String,
@@ -116,13 +318,15 @@ pub fn init_repository(
     repository: &Path,
     requested_name: &str,
     requested_title: Option<&str>,
+    template: PluginTemplate,
 ) -> Result<Value, String> {
+    let repository = absolute_path(repository)?;
     let name = normalized_name(requested_name)?;
     let title = requested_title
         .map(str::trim)
         .filter(|title| !title.is_empty())
         .unwrap_or(requested_name.trim());
-    let plugin_root = repository.join("plugins").join(&name);
+    let plugin_root = repository.join(".agents/plugins/plugins").join(&name);
     let marketplace = repository.join(".agents/plugins/marketplace.json");
     if plugin_root.exists() {
         return Err(format!(
@@ -130,24 +334,40 @@ pub fn init_repository(
             plugin_root.display()
         ));
     }
-    let files = template_files(&name, title)?;
+    let files = template_files(&name, title, template)?;
     for (relative, content) in &files {
         write_new(&plugin_root.join(relative), content)?;
     }
-    update_marketplace(&marketplace, &name)?;
+    let validation = match validate_plugin(&plugin_root) {
+        Ok(validation) => validation,
+        Err(error) => {
+            let _ = fs::remove_dir_all(&plugin_root);
+            return Err(error);
+        }
+    };
+    if let Err(error) = update_marketplace(&marketplace, &name) {
+        let _ = fs::remove_dir_all(&plugin_root);
+        return Err(error);
+    }
     Ok(json!({
         "created":true,
         "plugin":name,
+        "profile":template.to_string(),
         "pluginRoot":plugin_root,
         "marketplace":marketplace,
         "files":files.keys().collect::<Vec<_>>(),
-        "validation":validate_plugin(&plugin_root)?,
+        "validation":validation,
     }))
 }
 
+#[cfg(test)]
+#[path = "plugin_dev_tests.rs"]
+mod tests;
+
 pub fn validate_path(path: &Path) -> Result<Value, String> {
+    let path = absolute_path(path)?;
     if path.join(".codex-plugin/plugin.json").is_file() {
-        return validate_plugin(path);
+        return validate_plugin(&path);
     }
     let marketplace_path = path.join(".agents/plugins/marketplace.json");
     let marketplace: Value =
@@ -165,13 +385,97 @@ pub fn validate_path(path: &Path) -> Result<Value, String> {
     let mut reports = Vec::new();
     for entry in entries {
         let relative = validate_marketplace_entry(entry)?;
-        reports.push(validate_plugin(&resolve_relative(path, relative)?)?);
+        reports.push(validate_plugin(&resolve_relative(&path, relative)?)?);
     }
     Ok(json!({
         "valid":true,
         "marketplace":marketplace.get("name"),
         "plugins":reports,
     }))
+}
+
+pub fn test_path(path: &Path) -> Result<Value, String> {
+    let path = absolute_path(path)?;
+    let validation = validate_path(&path)?;
+    let plugin_roots = if path.join(".codex-plugin/plugin.json").is_file() {
+        vec![path.clone()]
+    } else {
+        let marketplace_path = path.join(".agents/plugins/marketplace.json");
+        let marketplace: Value =
+            serde_json::from_str(&fs::read_to_string(&marketplace_path).map_err(|error| {
+                format!("failed to read {}: {error}", marketplace_path.display())
+            })?)
+            .map_err(|error| format!("invalid marketplace: {error}"))?;
+        marketplace
+            .get("plugins")
+            .and_then(Value::as_array)
+            .ok_or_else(|| "marketplace plugins must be an array".to_string())?
+            .iter()
+            .map(validate_marketplace_entry)
+            .map(|relative| relative.and_then(|relative| resolve_relative(&path, relative)))
+            .collect::<Result<Vec<_>, _>>()?
+    };
+
+    let mut suites = Vec::new();
+    for plugin_root in plugin_roots {
+        let plugin = LocalPlugin::load(&plugin_root).map_err(|error| error.to_string())?;
+        let package_path = plugin_root.join("package.json");
+        let test_script = fs::read_to_string(&package_path)
+            .ok()
+            .and_then(|source| serde_json::from_str::<Value>(&source).ok())
+            .and_then(|package| {
+                package
+                    .pointer("/scripts/test")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+            });
+        let Some(test_script) = test_script else {
+            suites.push(json!({
+                "plugin":plugin.codex.name,
+                "executed":false,
+                "reason":"package.json scripts.test is not declared",
+            }));
+            continue;
+        };
+        let status = Command::new("npm")
+            .arg("test")
+            .current_dir(&plugin_root)
+            .env("CI", "1")
+            .status()
+            .map_err(|error| {
+                format!(
+                    "failed to start npm test for {}: {error}",
+                    plugin_root.display()
+                )
+            })?;
+        if !status.success() {
+            return Err(format!(
+                "plugin test failed for {} with status {}",
+                plugin.codex.name, status
+            ));
+        }
+        suites.push(json!({
+            "plugin":plugin.codex.name,
+            "executed":true,
+            "runner":"npm test",
+            "script":test_script,
+            "status":"passed",
+        }));
+    }
+    Ok(json!({
+        "valid":true,
+        "validation":validation,
+        "suites":suites,
+    }))
+}
+
+pub(super) fn absolute_path(path: &Path) -> Result<PathBuf, String> {
+    if path.is_absolute() {
+        return Ok(path.to_path_buf());
+    }
+    std::env::current_dir()
+        .map(|current| current.join(path))
+        .map_err(|error| format!("failed to resolve {}: {error}", path.display()))
 }
 
 fn validate_plugin(plugin_root: &Path) -> Result<Value, String> {
@@ -221,32 +525,48 @@ fn validate_plugin(plugin_root: &Path) -> Result<Value, String> {
         .pointer("/interface/displayName")
         .and_then(Value::as_str)
         .unwrap_or(&plugin.codex.name);
-    let compiled = compile_content(plugin_root, &plugin.codex.name, title, version)?;
-    for required in [
+    let compiled = plugin_root
+        .join("content")
+        .is_dir()
+        .then(|| compile_content(plugin_root, &plugin.codex.name, title, version))
+        .transpose()?;
+    let cloudflare_template_files = [
         "wrangler.toml",
         "worker/src/index.ts",
+        "server/index.mjs",
         "ui/index.html",
         "test/contract.test.mjs",
+        "test/standalone-runtime.test.mjs",
         ".github/workflows/deploy-cloudflare.yml",
-    ] {
-        if !plugin_root.join(required).is_file() {
-            return Err(format!(
-                "plugin is missing required template file {required}"
-            ));
+    ];
+    let has_cloudflare_template = cloudflare_template_files
+        .iter()
+        .any(|relative| plugin_root.join(relative).is_file());
+    if has_cloudflare_template {
+        for required in cloudflare_template_files {
+            if !plugin_root.join(required).is_file() {
+                return Err(format!(
+                    "plugin is missing required template file {required}"
+                ));
+            }
         }
+    }
+    let mut checks = vec!["manifest", "content", "mcp-config", "https"];
+    if has_cloudflare_template {
+        checks.extend(["cloudflare", "contract-test"]);
     }
     Ok(json!({
         "valid":true,
         "plugin":plugin.codex.name,
         "mahayanaExtension":plugin.mahayana.is_some(),
-        "homeSchema":compiled.home.schema,
-        "contentRevision":compiled.home.revision,
-        "feedItems":compiled.home.feed.items.len(),
-        "resources":compiled.resources.len(),
+        "homeSchema":compiled.as_ref().map(|content|content.home.schema.as_str()),
+        "contentRevision":compiled.as_ref().map(|content|content.home.revision.as_str()),
+        "feedItems":compiled.as_ref().map(|content|content.home.feed.items.len()).unwrap_or(0),
+        "resources":compiled.as_ref().map(|content|content.resources.len()).unwrap_or(0),
         "remoteServers":remote_servers,
         "localServers":local_servers,
         "localExecutionRequiresSeparateApproval":!local_servers.is_empty(),
-        "checks":["manifest","content","mcp-config","https","cloudflare","contract-test"],
+        "checks":checks,
     }))
 }
 
@@ -355,7 +675,7 @@ fn update_marketplace(path: &Path, name: &str) -> Result<(), String> {
     }
     plugins.push(json!({
         "name":name,
-        "source":{"source":"local","path":format!("./plugins/{name}")},
+        "source":{"source":"local","path":format!("./.agents/plugins/plugins/{name}")},
         "policy":{"installation":"AVAILABLE","authentication":"ON_INSTALL"},
         "category":"Productivity"
     }));

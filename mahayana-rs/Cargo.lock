@@ -4113,6 +4113,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "console"
+version = "0.15.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "054ccb5b10f9f2cbf51eb355ca1d05c2d279ce1804688d0db74b4733a5aeafd8"
+dependencies = [
+ "encode_unicode",
+ "libc",
+ "once_cell",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
 name = "const-hex"
 version = "1.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5137,6 +5149,12 @@ name = "embedded-io"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "edd0f118536f44f5ccd48bcb8b111bdc3de888b58c74639dfb034a357d0f206d"
+
+[[package]]
+name = "encode_unicode"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "34aa73646ffb006b8f5147f3dc182bd4bcb190227ce861fc4a4844bf8e3cb2c0"
 
 [[package]]
 name = "encoding_rs"
@@ -7740,6 +7758,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "insta"
+version = "1.46.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e82db8c87c7f1ccecb34ce0c24399b8a73081427f3c7c50a5d597925356115e4"
+dependencies = [
+ "console",
+ "once_cell",
+ "similar",
+ "tempfile",
+]
+
+[[package]]
 name = "instability"
 version = "0.3.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8418,6 +8448,7 @@ dependencies = [
  "codex-arg0",
  "codex-config",
  "codex-core",
+ "codex-core-plugins",
  "codex-exec-server",
  "codex-feedback",
  "codex-model-provider-info",
@@ -8458,6 +8489,8 @@ dependencies = [
  "codex-core-plugins",
  "codex-tui",
  "crossterm",
+ "insta",
+ "mahayana-core",
  "mahayana-ffi",
  "mahayana-miniapp-protocol",
  "mahayana-platform-client",
@@ -8466,6 +8499,7 @@ dependencies = [
  "ratatui",
  "rpassword",
  "serde_json",
+ "sha2 0.10.9",
  "tokio",
  "unicode-width 0.2.1",
  "url",
@@ -8486,6 +8520,7 @@ dependencies = [
 name = "mahayana-core"
 version = "0.1.0"
 dependencies = [
+ "pretty_assertions",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -8498,6 +8533,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "codex-protocol",
+ "fabushi-official-miniapps",
  "fabushi-telegram-runtime",
  "mahayana-agent",
  "mahayana-agent-codex",

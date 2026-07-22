@@ -53,6 +53,16 @@ fn rejects_codex_identity_fields_in_extension() {
     assert!(matches!(error, ManifestError::Decode { .. }));
 }
 
+#[test]
+fn cli_runtime_accepts_safe_path_commands_and_rejects_escaping_paths() {
+    assert!(validate_cli_executable("node").is_ok());
+    assert!(validate_cli_executable("node.exe").is_ok());
+    assert!(validate_cli_executable("./runtime/cli/plugin").is_ok());
+    assert!(validate_cli_executable("../outside/plugin").is_err());
+    assert!(validate_cli_executable("/usr/bin/node").is_err());
+    assert!(validate_cli_executable("node --eval").is_err());
+}
+
 fn temporary_plugin_root() -> PathBuf {
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)

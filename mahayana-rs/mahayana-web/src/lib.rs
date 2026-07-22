@@ -25,6 +25,7 @@ use mahayana_core::RuntimeCommand;
 use mahayana_core::RuntimeEvent;
 use mahayana_core::RuntimeResponse;
 use mahayana_core::RuntimeStatus;
+use mahayana_core::capability::CapabilityRegistry;
 use serde::Deserialize;
 use serde_json::Value;
 use serde_json::json;
@@ -165,6 +166,56 @@ impl MahayanaWebRuntime {
             RuntimeCommand::ListConversations => RuntimeResponse::Conversations {
                 data: browser_conversations(&self.state.borrow().plugins),
             },
+            RuntimeCommand::ListCapabilities { query } => {
+                let registry = CapabilityRegistry::from_conversations(
+                    browser_conversations(&self.state.borrow().plugins),
+                    BuildProfile::WebWasm,
+                );
+                RuntimeResponse::Capabilities {
+                    data: registry.list(query.as_deref()),
+                }
+            }
+            RuntimeCommand::InvokeCapability {
+                capability_id,
+                text,
+                client_message_id,
+            } => {
+                let registry = CapabilityRegistry::from_conversations(
+                    browser_conversations(&self.state.borrow().plugins),
+                    BuildProfile::WebWasm,
+                );
+                let capability = registry
+                    .resolve(&capability_id)
+                    .cloned()
+                    .ok_or_else(|| JsValue::from_str("capability was not found"))?;
+                if !capability.is_invokable() {
+                    return Err(JsValue::from_str(
+                        capability
+                            .unavailable_reason
+                            .as_deref()
+                            .unwrap_or("capability unavailable"),
+                    ));
+                }
+                let conversation_id = capability.conversation_id;
+                let send_command = RuntimeCommand::SendMessage {
+                    conversation_id: conversation_id.clone(),
+                    text,
+                    client_message_id,
+                };
+                let send_command = serde_json::to_string(&send_command).map_err(js_error)?;
+                let accepted = self.execute(&send_command)?;
+                let accepted: Value = serde_json::from_str(&accepted).map_err(js_error)?;
+                let operation_id = accepted
+                    .pointer("/data/operationId")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                    .ok_or_else(|| JsValue::from_str("runtime did not return an operation id"))?;
+                RuntimeResponse::CapabilityAccepted {
+                    capability_id: capability.id,
+                    conversation_id,
+                    operation_id: OperationId(operation_id),
+                }
+            }
             RuntimeCommand::ListPluginCommands { plugin_id } => {
                 let state = self.state.borrow();
                 let mut data = Vec::new();

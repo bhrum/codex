@@ -1,5 +1,6 @@
 ---
 source: cli/src/doctor/output.rs
+assertion_line: 1305
 expression: "render_human_report(&sample_report(), detailed_no_color_unicode_options())"
 ---
 Mahayana Doctor v0.0.0
@@ -28,10 +29,10 @@ Environment
       version                  git version 2.54.0
       repo detected            true
   ⚠ terminal     narrow terminal
-  ✓ title        default · project mahayana
+  ✓ title        default · project codex
       title source             default
       title items              activity, project-name
-      project value            mahayana
+      project value            codex
   ✓ state        state paths inspectable
 
 Configuration

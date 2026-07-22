@@ -17,6 +17,7 @@ codex-cli.workspace = true
 codex-core-plugins.workspace = true
 codex-tui.workspace = true
 crossterm.workspace = true
+mahayana-core.workspace = true
 mahayana-ffi = { path = "../mahayana-ffi" }
 mahayana-product = { package = "mahayana-platform-client", path = "../mahayana-product" }
 mahayana-miniapp-protocol.workspace = true
@@ -25,7 +26,11 @@ mahayana-plugin-host.workspace = true
 ratatui.workspace = true
 rpassword.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 tokio.workspace = true
 unicode-width.workspace = true
 url.workspace = true
 uuid.workspace = true
+
+[dev-dependencies]
+insta = "1.46.3"

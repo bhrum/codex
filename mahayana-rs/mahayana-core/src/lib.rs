@@ -6,6 +6,8 @@ use serde_json::Value;
 use std::fmt;
 use std::path::PathBuf;
 
+pub mod capability;
+
 pub const RUNTIME_ABI_VERSION: u32 = 1;
 pub const CONVERSATION_SCHEMA_VERSION: u32 = 1;
 pub const MODEL_RUNTIME_VERSION: u32 = 1;
@@ -155,7 +157,7 @@ impl Conversation {
     pub fn codex_assistant() -> Self {
         Self {
             id: ConversationId(CODEX_ASSISTANT_CONVERSATION_ID.to_string()),
-            title: "Codex（大乘 AI）".to_string(),
+            title: "Mahayana（大乘 AI）".to_string(),
             peer: PeerKind::CodexAi,
             pinned: true,
             unread_count: 0,
@@ -204,6 +206,16 @@ pub enum RuntimeCommand {
     Status,
     #[serde(rename = "mahayana.conversation.list")]
     ListConversations,
+    #[serde(rename = "mahayana.capability.list")]
+    ListCapabilities { query: Option<String> },
+    #[serde(rename = "mahayana.capability.invoke")]
+    InvokeCapability {
+        #[serde(rename = "capabilityId")]
+        capability_id: String,
+        text: String,
+        #[serde(rename = "clientMessageId")]
+        client_message_id: Option<String>,
+    },
     #[serde(rename = "mahayana.plugin.commands")]
     ListPluginCommands {
         #[serde(rename = "pluginId")]
@@ -273,6 +285,19 @@ pub enum RuntimeResponse {
     Status(RuntimeStatus),
     #[serde(rename = "mahayana.conversation.list")]
     Conversations { data: Vec<Conversation> },
+    #[serde(rename = "mahayana.capability.list")]
+    Capabilities {
+        data: Vec<capability::CapabilityDescriptor>,
+    },
+    #[serde(rename = "mahayana.capability.accepted")]
+    CapabilityAccepted {
+        #[serde(rename = "capabilityId")]
+        capability_id: String,
+        #[serde(rename = "conversationId")]
+        conversation_id: ConversationId,
+        #[serde(rename = "operationId")]
+        operation_id: OperationId,
+    },
     #[serde(rename = "mahayana.plugin.commands")]
     PluginCommands { data: Vec<PluginCommandDescriptor> },
     #[serde(rename = "mahayana.plugin.ui")]
@@ -455,7 +480,21 @@ mod tests {
     fn codex_assistant_is_a_pinned_conversation() {
         let conversation = Conversation::codex_assistant();
         assert_eq!(conversation.id.as_str(), CODEX_ASSISTANT_CONVERSATION_ID);
+        assert_eq!(conversation.title, "Mahayana（大乘 AI）");
         assert_eq!(conversation.peer, PeerKind::CodexAi);
         assert!(conversation.pinned);
+    }
+
+    #[test]
+    fn capability_command_wire_contract_uses_stable_selector() {
+        let command = RuntimeCommand::InvokeCapability {
+            capability_id: "miniapp.bot-father".to_string(),
+            text: "创建一个机器人".to_string(),
+            client_message_id: Some("client-2".to_string()),
+        };
+        let json = serde_json::to_value(command).expect("serialize capability command");
+        assert_eq!(json["@type"], "mahayana.capability.invoke");
+        assert_eq!(json["capabilityId"], "miniapp.bot-father");
+        assert_eq!(json["clientMessageId"], "client-2");
     }
 }

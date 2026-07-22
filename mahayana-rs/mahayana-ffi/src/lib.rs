@@ -1,5 +1,7 @@
 //! C/JSON ABI for native Mahayana hosts.
 
+use fabushi_official_miniapps::OFFICIAL_PLUGIN_IDS;
+use fabushi_official_miniapps::app_definition;
 use mahayana_agent::UnavailableAgentBackend;
 #[cfg(any(feature = "desktop-full", feature = "mobile-embedded"))]
 use mahayana_agent_codex::CodexAgentBackend;
@@ -28,6 +30,7 @@ use once_cell::sync::Lazy;
 use serde_json::Value;
 use serde_json::json;
 use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::ffi::CStr;
 use std::ffi::CString;
@@ -66,6 +69,10 @@ struct RuntimeCreateConfig {
     telegram_self_user_id: Option<i64>,
     host_platform: Option<HostPlatform>,
     mini_apps: Vec<MiniAppDefinition>,
+    use_codex_account: bool,
+    /// Desktop hosts inherit enabled local plugins from the user's standard
+    /// Codex installation by default. Tests and constrained hosts may opt out.
+    inherit_installed_plugins: Option<bool>,
 }
 
 /// Creates a long-lived runtime. A null config pointer uses safe defaults.
@@ -122,11 +129,12 @@ fn build_runtime(create: RuntimeCreateConfig) -> Result<MahayanaRuntime, String>
         .product_session_path
         .map(|path| MahayanaProductClient::new("https://api.ombhrum.com", path))
         .unwrap_or_default();
-    let mini_apps = if create.mini_apps.is_empty() {
-        discover_mini_apps(&product_client).unwrap_or_else(default_mini_apps)
+    let configured_mini_apps = if create.mini_apps.is_empty() {
+        discover_mini_apps(&product_client).unwrap_or_default()
     } else {
         create.mini_apps.clone()
     };
+    let mini_apps = merge_official_mini_apps(configured_mini_apps);
     let session_token = product_client.session_token().ok();
     let mut builder = RuntimeBuilder::new(runtime_config.clone());
     #[cfg(any(feature = "desktop-full", feature = "mobile-embedded"))]
@@ -188,10 +196,14 @@ fn build_runtime(create: RuntimeCreateConfig) -> Result<MahayanaRuntime, String>
             codex_home,
             bundled_plugin_marketplace: create.bundled_plugin_marketplace,
             bundled_plugin_ids: mini_apps.iter().map(|app| app.plugin_id.clone()).collect(),
+            inherit_installed_plugins: create.inherit_installed_plugins.unwrap_or_else(|| {
+                matches!(runtime_config.build_profile, BuildProfile::DesktopFull) && !cfg!(test)
+            }),
             cwd,
             workspace_roots,
             model: runtime_config.model.model.clone(),
             responses_base_url,
+            use_codex_account: create.use_codex_account,
             product_session_token: session_token.clone(),
             sandbox_mode: codex_protocol::config_types::SandboxMode::WorkspaceWrite,
             approval_policy: codex_protocol::protocol::AskForApproval::OnRequest,
@@ -240,22 +252,28 @@ fn build_runtime(create: RuntimeCreateConfig) -> Result<MahayanaRuntime, String>
         .map_err(|error| error.to_string())
 }
 
-fn default_mini_apps() -> Vec<MiniAppDefinition> {
-    [
-        ("global-dharma", "全球法布施"),
-        ("faliu-flashcards", "法流记忆卡"),
-        ("platform-publish", "平台发布"),
-        ("hermes-installer", "Hermes 安装器"),
-        ("bot-father", "Bot Father"),
-        ("mahayana-assistant", "大乘助手"),
-    ]
-    .into_iter()
-    .map(|(plugin_id, title)| MiniAppDefinition {
-        plugin_id: plugin_id.into(),
-        title: title.into(),
-        pinned: false,
-    })
-    .collect()
+fn merge_official_mini_apps(
+    configured: impl IntoIterator<Item = MiniAppDefinition>,
+) -> Vec<MiniAppDefinition> {
+    let mut definitions = configured
+        .into_iter()
+        .map(|definition| (definition.plugin_id.clone(), definition))
+        .collect::<BTreeMap<_, _>>();
+    for plugin_id in OFFICIAL_PLUGIN_IDS {
+        let definition = app_definition(plugin_id).expect("official plugin definition");
+        let pinned = definitions
+            .get(plugin_id)
+            .is_some_and(|definition| definition.pinned);
+        definitions.insert(
+            plugin_id.to_string(),
+            MiniAppDefinition {
+                plugin_id: definition.id,
+                title: definition.title,
+                pinned,
+            },
+        );
+    }
+    definitions.into_values().collect()
 }
 
 fn discover_mini_apps(client: &MahayanaProductClient) -> Option<Vec<MiniAppDefinition>> {

@@ -14,6 +14,8 @@ const SUPPORTED_BRIDGE_VERSION: &str = "1.0";
 pub struct MahayanaPluginManifest {
     pub schema_version: u32,
     #[serde(default)]
+    pub supported_platforms: Vec<crate::HostPlatform>,
+    #[serde(default)]
     pub miniapp: Option<MiniAppDeclaration>,
     #[serde(default)]
     pub commands: Vec<CommandDeclaration>,
@@ -41,6 +43,12 @@ impl MahayanaPluginManifest {
         if self.schema_version != SUPPORTED_SCHEMA_VERSION {
             return Err(ManifestError::UnsupportedSchema(self.schema_version));
         }
+        let mut platforms = HashSet::new();
+        for platform in &self.supported_platforms {
+            if !platforms.insert(*platform) {
+                return Err(ManifestError::DuplicateSupportedPlatform(*platform));
+            }
+        }
         if let Some(miniapp) = &self.miniapp {
             if miniapp.bridge_version != SUPPORTED_BRIDGE_VERSION {
                 return Err(ManifestError::UnsupportedBridge(
@@ -61,7 +69,7 @@ impl MahayanaPluginManifest {
         }
         if let Some(runtime) = &self.runtime {
             if let Some(cli) = &runtime.cli {
-                validate_relative_path(&cli.executable)?;
+                validate_cli_executable(&cli.executable)?;
             }
             if let Some(wasm) = &runtime.wasm {
                 validate_relative_path(&wasm.module)?;
@@ -149,6 +157,10 @@ pub enum HostPermission {
     StorageLocal,
     #[serde(rename = "ui.control")]
     UiControl,
+    #[serde(rename = "desktop.accessibility")]
+    DesktopAccessibility,
+    #[serde(rename = "desktop.chatgpt.approvals")]
+    DesktopChatGptApprovals,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -181,6 +193,24 @@ fn validate_relative_path(value: &str) -> Result<PathBuf, ManifestError> {
         return Err(ManifestError::InvalidRelativePath(value.to_string()));
     }
     Ok(path.to_path_buf())
+}
+
+fn validate_cli_executable(value: &str) -> Result<(), ManifestError> {
+    if value.starts_with("./") {
+        validate_relative_path(value)?;
+        return Ok(());
+    }
+    let is_safe_path_command = !value.is_empty()
+        && value.len() <= 128
+        && !value.contains(['/', '\\', '\r', '\n'])
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'));
+    if is_safe_path_command {
+        Ok(())
+    } else {
+        Err(ManifestError::InvalidRelativePath(value.to_string()))
+    }
 }
 
 fn validate_segment(value: &str, kind: &'static str) -> Result<(), ManifestError> {
@@ -267,6 +297,8 @@ pub enum ManifestError {
     DuplicateCommand(String),
     #[error("duplicate Mini App permission: {0:?}")]
     DuplicatePermission(HostPermission),
+    #[error("duplicate supported platform: {0:?}")]
+    DuplicateSupportedPlatform(crate::HostPlatform),
     #[error("entitlement gate must target tool:<name>: {0}")]
     InvalidGateTarget(String),
     #[error("duplicate entitlement gate target: {0}")]

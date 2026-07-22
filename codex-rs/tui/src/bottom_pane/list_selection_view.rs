@@ -1463,14 +1463,14 @@ mod tests {
         let items = vec![
             SelectionItem {
                 name: "Read Only".to_string(),
-                description: Some("Codex can read files".to_string()),
+                description: Some("Mahayana can read files".to_string()),
                 is_current: true,
                 dismiss_on_select: true,
                 ..Default::default()
             },
             SelectionItem {
                 name: "Full Access".to_string(),
-                description: Some("Codex can edit files".to_string()),
+                description: Some("Mahayana can edit files".to_string()),
                 is_current: false,
                 dismiss_on_select: true,
                 ..Default::default()
@@ -1579,7 +1579,7 @@ mod tests {
 
     #[test]
     fn renders_blank_line_between_subtitle_and_items() {
-        let view = make_selection_view(Some("Switch between Codex approval presets"));
+        let view = make_selection_view(Some("Switch between Mahayana approval presets"));
         assert_snapshot!("list_selection_spacing_with_subtitle", render_lines(&view));
     }
 

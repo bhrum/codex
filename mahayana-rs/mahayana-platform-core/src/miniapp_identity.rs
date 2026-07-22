@@ -1,4 +1,5 @@
-use sha2::{Digest, Sha256};
+use sha2::Digest;
+use sha2::Sha256;
 use url::Url;
 
 /// Canonicalizes a repository source without preserving credentials, query
@@ -73,6 +74,7 @@ pub fn legacy_official_conversation_id(plugin_id: &str) -> Option<String> {
             | "hermes-installer"
             | "bot-father"
             | "mahayana-assistant"
+            | "chatgpt-auto-confirm"
     )
     .then(|| format!("miniapp:{plugin_id}"))
 }

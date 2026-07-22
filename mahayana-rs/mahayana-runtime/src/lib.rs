@@ -38,6 +38,7 @@ use mahayana_core::RuntimeConfig;
 use mahayana_core::RuntimeEvent;
 use mahayana_core::RuntimeResponse;
 use mahayana_core::RuntimeStatus;
+use mahayana_core::capability::CapabilityRegistry;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -192,37 +193,46 @@ impl MahayanaRuntime {
     pub fn execute(&self, command: RuntimeCommand) -> Result<RuntimeResponse, RuntimeError> {
         match command {
             RuntimeCommand::Status => Ok(RuntimeResponse::Status(self.status())),
-            RuntimeCommand::ListConversations => {
-                let providers = self.providers.providers();
-                let (conversations, degraded) = self.async_runtime.block_on(async move {
-                    let mut conversations = Vec::new();
-                    let mut degraded = Vec::new();
-                    for provider in providers {
-                        match provider.list_conversations().await {
-                            Ok(provider_conversations) => {
-                                conversations.extend(provider_conversations)
-                            }
-                            Err(error) => {
-                                degraded.push((provider.key().to_string(), error.to_string()))
-                            }
-                        }
-                    }
-                    conversations.sort_by(|left, right| {
-                        right
-                            .pinned
-                            .cmp(&left.pinned)
-                            .then_with(|| right.updated_at_ms.cmp(&left.updated_at_ms))
-                            .then_with(|| left.id.cmp(&right.id))
+            RuntimeCommand::ListConversations => Ok(RuntimeResponse::Conversations {
+                data: self.list_conversations()?,
+            }),
+            RuntimeCommand::ListCapabilities { query } => {
+                let registry = CapabilityRegistry::from_conversations(
+                    self.list_conversations()?,
+                    self.config.build_profile,
+                );
+                Ok(RuntimeResponse::Capabilities {
+                    data: registry.list(query.as_deref()),
+                })
+            }
+            RuntimeCommand::InvokeCapability {
+                capability_id,
+                text,
+                client_message_id,
+            } => {
+                let registry = CapabilityRegistry::from_conversations(
+                    self.list_conversations()?,
+                    self.config.build_profile,
+                );
+                let capability = registry
+                    .resolve(&capability_id)
+                    .cloned()
+                    .ok_or_else(|| RuntimeError::CapabilityNotFound(capability_id.clone()))?;
+                if !capability.is_invokable() {
+                    return Err(RuntimeError::CapabilityUnavailable {
+                        capability_id: capability.id,
+                        reason: capability
+                            .unavailable_reason
+                            .unwrap_or_else(|| "当前平台不可用".to_string()),
                     });
-                    (conversations, degraded)
-                });
-                for (provider, message) in degraded {
-                    let _ = self
-                        .event_tx
-                        .send(RuntimeEvent::ProviderDegraded { provider, message });
                 }
-                Ok(RuntimeResponse::Conversations {
-                    data: conversations,
+                let conversation_id = capability.conversation_id;
+                let operation_id =
+                    self.start_message(conversation_id.clone(), text, client_message_id)?;
+                Ok(RuntimeResponse::CapabilityAccepted {
+                    capability_id: capability.id,
+                    conversation_id,
+                    operation_id,
                 })
             }
             RuntimeCommand::ListPluginCommands { plugin_id } => {
@@ -324,55 +334,9 @@ impl MahayanaRuntime {
                 conversation_id,
                 text,
                 client_message_id,
-            } => {
-                if text.trim().is_empty() {
-                    return Err(RuntimeError::EmptyMessage);
-                }
-                let provider = self.providers.for_conversation(&conversation_id)?;
-                let provider_key = provider.key().to_string();
-                let operation_id = OperationId::generated("operation");
-                lock(&self.operations)?.insert(operation_id.clone(), provider_key.clone());
-                let request = SendMessageRequest {
-                    conversation_id,
-                    operation_id: operation_id.clone(),
-                    text,
-                    client_message_id,
-                };
-                let sink: SharedConversationEventSink = Arc::new(RuntimeEventSink {
-                    provider_key,
-                    event_tx: self.event_tx.clone(),
-                    approvals: Arc::clone(&self.approvals),
-                });
-                let event_tx = self.event_tx.clone();
-                let operations = Arc::clone(&self.operations);
-                let task_operation_id = operation_id.clone();
-                self.async_runtime.spawn(async move {
-                    let result = provider.send_message(request, sink).await;
-                    let event = match result {
-                        Ok(()) => RuntimeEvent::OperationCompleted {
-                            operation_id: task_operation_id.clone(),
-                        },
-                        Err(error) => {
-                            let code = if matches!(error, ConversationError::UsageLimitExceeded(_))
-                            {
-                                "usage_limit_exceeded"
-                            } else {
-                                "provider_error"
-                            };
-                            RuntimeEvent::OperationFailed {
-                                operation_id: task_operation_id.clone(),
-                                code: code.to_string(),
-                                message: error.to_string(),
-                            }
-                        }
-                    };
-                    let _ = event_tx.send(event);
-                    if let Ok(mut operations) = operations.lock() {
-                        operations.remove(&task_operation_id);
-                    }
-                });
-                Ok(RuntimeResponse::Accepted { operation_id })
-            }
+            } => Ok(RuntimeResponse::Accepted {
+                operation_id: self.start_message(conversation_id, text, client_message_id)?,
+            }),
             RuntimeCommand::Interrupt { operation_id } => {
                 let provider_key = lock(&self.operations)?
                     .get(&operation_id)
@@ -407,6 +371,88 @@ impl MahayanaRuntime {
                 Ok(RuntimeResponse::ApprovalResolved { approval_id })
             }
         }
+    }
+
+    fn list_conversations(&self) -> Result<Vec<Conversation>, RuntimeError> {
+        let providers = self.providers.providers();
+        let (mut conversations, degraded) = self.async_runtime.block_on(async move {
+            let mut conversations = Vec::new();
+            let mut degraded = Vec::new();
+            for provider in providers {
+                match provider.list_conversations().await {
+                    Ok(mut provider_conversations) => {
+                        conversations.append(&mut provider_conversations)
+                    }
+                    Err(error) => degraded.push((provider.key().to_string(), error.to_string())),
+                }
+            }
+            (conversations, degraded)
+        });
+        conversations.sort_by(|left, right| {
+            right
+                .pinned
+                .cmp(&left.pinned)
+                .then_with(|| right.updated_at_ms.cmp(&left.updated_at_ms))
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        for (provider, message) in degraded {
+            let _ = self
+                .event_tx
+                .send(RuntimeEvent::ProviderDegraded { provider, message });
+        }
+        Ok(conversations)
+    }
+
+    fn start_message(
+        &self,
+        conversation_id: ConversationId,
+        text: String,
+        client_message_id: Option<String>,
+    ) -> Result<OperationId, RuntimeError> {
+        if text.trim().is_empty() {
+            return Err(RuntimeError::EmptyMessage);
+        }
+        let provider = self.providers.for_conversation(&conversation_id)?;
+        let provider_key = provider.key().to_string();
+        let operation_id = OperationId::generated("operation");
+        lock(&self.operations)?.insert(operation_id.clone(), provider_key.clone());
+        let request = SendMessageRequest {
+            conversation_id,
+            operation_id: operation_id.clone(),
+            text,
+            client_message_id,
+        };
+        let sink: SharedConversationEventSink = Arc::new(RuntimeEventSink {
+            provider_key,
+            event_tx: self.event_tx.clone(),
+            approvals: Arc::clone(&self.approvals),
+        });
+        let event_tx = self.event_tx.clone();
+        let operations = Arc::clone(&self.operations);
+        let task_operation_id = operation_id.clone();
+        self.async_runtime.spawn(async move {
+            let result = provider.send_message(request, sink).await;
+            let event = match result {
+                Ok(()) => RuntimeEvent::OperationCompleted {
+                    operation_id: task_operation_id.clone(),
+                },
+                Err(error) => RuntimeEvent::OperationFailed {
+                    operation_id: task_operation_id.clone(),
+                    code: if matches!(error, ConversationError::UsageLimitExceeded(_)) {
+                        "usage_limit_exceeded"
+                    } else {
+                        "provider_error"
+                    }
+                    .to_string(),
+                    message: error.to_string(),
+                },
+            };
+            let _ = event_tx.send(event);
+            if let Ok(mut operations) = operations.lock() {
+                operations.remove(&task_operation_id);
+            }
+        });
+        Ok(operation_id)
     }
 
     pub fn receive(&self, timeout: Duration) -> Result<Option<RuntimeEvent>, RuntimeError> {
@@ -678,6 +724,13 @@ pub enum RuntimeError {
     Synchronization(String),
     #[error("local Mini App runtime failed: {0}")]
     LocalPlugin(String),
+    #[error("capability not found: {0}")]
+    CapabilityNotFound(String),
+    #[error("capability unavailable: {capability_id}: {reason}")]
+    CapabilityUnavailable {
+        capability_id: String,
+        reason: String,
+    },
 }
 
 fn local_plugin_commands(plugin_id: Option<&str>) -> Vec<PluginCommandDescriptor> {

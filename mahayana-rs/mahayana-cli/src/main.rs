@@ -1,8 +1,11 @@
+use clap::Args;
 use clap::Parser;
 use clap::Subcommand;
 use codex_cli::plugin_cmd::PluginCli;
 use codex_cli::plugin_cmd::PluginSubcommand;
 use codex_core_plugins::plugin_bundle_archive::pack_plugin_bundle_tar_gz;
+use mahayana_core::ConversationId;
+use mahayana_core::RuntimeCommand;
 use mahayana_plugin_host::LocalPlugin;
 use mahayana_product::MahayanaProductClient;
 use mahayana_product::redact_secrets;
@@ -16,8 +19,11 @@ use mahayana_runtime::mahayana_runtime_receive;
 use mahayana_runtime::mahayana_runtime_resolve_approval;
 use serde_json::Value;
 use serde_json::json;
+use sha2::Digest;
+use sha2::Sha256;
 use std::ffi::CStr;
 use std::ffi::CString;
+use std::ffi::OsString;
 use std::fs;
 use std::io::Write;
 use std::io::{self};
@@ -36,60 +42,135 @@ mod plugin_dev_template;
 #[command(
     name = "mahayana",
     version,
-    about = "大乘 CLI：Codex、插件、MCP 与 Mini App 统一宿主"
+    about = "大乘 CLI：智能编程代理、插件、MCP 与 Mini App 统一宿主"
 )]
 struct Cli {
     #[command(subcommand)]
     command: Option<CliCommand>,
 }
 
+#[derive(Debug, Args)]
+struct EmbeddedAgentArgs {
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    args: Vec<OsString>,
+}
+
 #[derive(Debug, Subcommand)]
 enum CliCommand {
+    /// 登录大乘账号。
+    #[command(
+        after_help = "登录方式：\n  mahayana login alipay\n  mahayana login password <用户名>\n  mahayana login test [--token-stdin]"
+    )]
     Login {
-        #[arg(trailing_var_arg = true)]
+        #[arg(trailing_var_arg = true, value_name = "METHOD_OR_ARGUMENT")]
         args: Vec<String>,
     },
+    /// 注册大乘账号。
     Register {
-        #[arg(trailing_var_arg = true)]
+        #[arg(trailing_var_arg = true, value_name = "ARGUMENT")]
         args: Vec<String>,
     },
-    SendCode {
-        email: String,
-    },
+    /// 向邮箱发送验证码。
+    SendCode { email: String },
+    /// 退出当前大乘账号。
     Logout,
+    /// 查看当前大乘账号认证状态。
     Auth,
     /// 查看服务端权威的模型 Token 用量与剩余额度。
     Usage,
+    /// 查看大乘运行时状态。
     Status,
+    /// 列出会话联系人。
     #[command(alias = "list")]
     Contacts,
-    History {
-        conversation_id: String,
+    /// 列出或调用联系人、机器人、插件、小程序和应用能力。
+    Capability {
+        #[command(subcommand)]
+        command: CapabilityCommand,
     },
+    /// 查看指定会话的消息历史。
+    History { conversation_id: String },
+    /// 向指定会话发送消息。
     Send {
         conversation_id: String,
         #[arg(required = true, trailing_var_arg = true)]
         text: Vec<String>,
     },
-    Chat {
-        conversation_id: Option<String>,
-    },
+    /// 打开交互式聊天，可选继续指定会话。
+    Chat { conversation_id: Option<String> },
+    /// 非交互运行大乘智能编程代理。
+    #[command(visible_alias = "e")]
+    Exec(EmbeddedAgentArgs),
+    /// 非交互执行代码审查。
+    Review(EmbeddedAgentArgs),
+    /// 管理外部 MCP 服务。
+    Mcp(EmbeddedAgentArgs),
+    /// 以 stdio 启动大乘 MCP 服务。
+    McpServer(EmbeddedAgentArgs),
+    /// 启动或管理大乘 App Server。
+    AppServer(EmbeddedAgentArgs),
+    /// 管理支持远程控制的 App Server。
+    RemoteControl(EmbeddedAgentArgs),
+    /// 启动大乘桌面应用。
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    App(EmbeddedAgentArgs),
+    /// 生成 Shell 自动补全脚本。
+    Completion(EmbeddedAgentArgs),
+    /// 更新大乘 CLI。
+    Update(EmbeddedAgentArgs),
+    /// 诊断大乘 CLI、配置、认证和运行环境。
+    Doctor(EmbeddedAgentArgs),
+    /// 在大乘提供的沙箱中运行命令。
+    Sandbox(EmbeddedAgentArgs),
+    /// 调试工具。
+    Debug(EmbeddedAgentArgs),
+    /// 应用智能代理最近生成的补丁。
+    #[command(visible_alias = "a")]
+    Apply(EmbeddedAgentArgs),
+    /// 恢复以前的交互会话。
+    Resume(EmbeddedAgentArgs),
+    /// 归档已保存的会话。
+    Archive(EmbeddedAgentArgs),
+    /// 永久删除已保存的会话。
+    Delete(EmbeddedAgentArgs),
+    /// 取消归档已保存的会话。
+    Unarchive(EmbeddedAgentArgs),
+    /// 从以前的会话创建分支。
+    Fork(EmbeddedAgentArgs),
+    /// 浏览云端任务并在本地应用修改。
+    #[command(alias = "cloud-tasks")]
+    Cloud(EmbeddedAgentArgs),
+    /// 启动独立 Exec Server 服务。
+    ExecServer(EmbeddedAgentArgs),
+    /// 查看和管理功能开关。
+    Features(EmbeddedAgentArgs),
+    #[command(hide = true)]
+    Execpolicy(EmbeddedAgentArgs),
+    #[command(hide = true, name = "responses-api-proxy")]
+    ResponsesApiProxy(EmbeddedAgentArgs),
+    #[command(hide = true, name = "stdio-to-uds")]
+    StdioToUds(EmbeddedAgentArgs),
+    /// 管理和运行大乘 Mini App。
     Miniapp {
         #[arg(required = true, trailing_var_arg = true)]
         args: Vec<String>,
     },
+    /// 浏览和安装大乘市场内容。
     Marketplace {
         #[command(subcommand)]
         command: MarketplaceCommand,
     },
+    /// 创建、安装、验证和发布大乘插件。
     Plugin {
         #[command(subcommand)]
         command: PluginCommand,
     },
+    /// 查看和管理大乘钱包。
     Wallet {
         #[command(subcommand)]
         command: WalletCommand,
     },
+    /// 查看和恢复大乘购买记录。
     Purchases {
         #[command(subcommand)]
         command: PurchasesCommand,
@@ -97,20 +178,49 @@ enum CliCommand {
 }
 
 #[derive(Debug, Subcommand)]
+enum CapabilityCommand {
+    /// 列出共享能力；可按标题、稳定 ID、mention 或描述搜索。
+    List {
+        #[arg(long, short = 'q')]
+        query: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// 通过稳定 capability ID 或 @mention 调用能力。
+    Invoke {
+        capability_id: String,
+        #[arg(required = true, trailing_var_arg = true)]
+        text: Vec<String>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
 enum MarketplaceCommand {
     Browse,
-    Search { query: String },
+    Search {
+        query: String,
+    },
+    /// Download an approved plugin from its independent Pages/Worker site.
+    Install {
+        plugin_id: String,
+        #[arg(long)]
+        version: Option<String>,
+        #[arg(long, default_value = ".")]
+        repository: PathBuf,
+    },
 }
 
 #[derive(Debug, Subcommand)]
 enum PluginCommand {
-    /// Non-destructively add a conversational MCP plugin under plugins/<name>.
+    /// Non-destructively add an MCP plugin under .agents/plugins/plugins/<name>.
     Init {
         name: String,
         #[arg(long, default_value = ".")]
         repository: PathBuf,
         #[arg(long)]
         title: Option<String>,
+        #[arg(long, value_enum, default_value_t = plugin_dev::PluginTemplate::Conversational)]
+        profile: plugin_dev::PluginTemplate,
     },
     List {
         #[arg(long, short = 'm')]
@@ -123,6 +233,7 @@ enum PluginCommand {
     Info {
         plugin_id: String,
     },
+    #[command(alias = "add")]
     Install {
         plugin: String,
         #[arg(long, short = 'm')]
@@ -140,6 +251,7 @@ enum PluginCommand {
         #[arg(long)]
         json: bool,
     },
+    #[command(alias = "remove")]
     Uninstall {
         plugin: String,
         #[arg(long, short = 'm')]
@@ -147,6 +259,8 @@ enum PluginCommand {
         #[arg(long)]
         json: bool,
     },
+    /// 管理兼容的插件市场来源。
+    Marketplace(EmbeddedAgentArgs),
     Open {
         plugin_id: String,
     },
@@ -157,6 +271,10 @@ enum PluginCommand {
         json: Option<String>,
     },
     Validate {
+        path: PathBuf,
+    },
+    /// Validate a plugin and execute its declared local test suite.
+    Test {
         path: PathBuf,
     },
     Pack {
@@ -170,6 +288,9 @@ enum PluginCommand {
         plugin_id: String,
         #[arg(long)]
         version: String,
+        /// Reuse an already deployed HTTPS plugin site instead of running its deploy script.
+        #[arg(long)]
+        deployment_url: Option<String>,
     },
 }
 
@@ -191,6 +312,15 @@ enum PurchasesCommand {
 }
 
 fn main() {
+    let raw_args = std::env::args_os().collect::<Vec<_>>();
+    if should_run_embedded_agent_cli(raw_args.get(1..).unwrap_or_default()) {
+        if let Err(error) = codex_cli::run_multitool_with_args(raw_args) {
+            eprintln!("错误：{error}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
     let arg0_guard = codex_arg0::arg0_dispatch();
     let codex_executable_path = arg0_guard
         .as_ref()
@@ -199,6 +329,53 @@ fn main() {
         eprintln!("错误：{error}");
         std::process::exit(1);
     }
+}
+
+fn should_run_embedded_agent_cli(args: &[OsString]) -> bool {
+    let Some(command) = args.first().and_then(|value| value.to_str()) else {
+        return false;
+    };
+    if command == "help" {
+        return args
+            .get(1)
+            .and_then(|value| value.to_str())
+            .is_some_and(|command| !is_product_command(command));
+    }
+    !matches!(command, "-h" | "--help" | "-V" | "--version") && !is_product_command(command)
+}
+
+fn is_product_command(command: &str) -> bool {
+    matches!(
+        command,
+        "login"
+            | "register"
+            | "send-code"
+            | "logout"
+            | "auth"
+            | "usage"
+            | "status"
+            | "contacts"
+            | "list"
+            | "history"
+            | "send"
+            | "chat"
+            | "miniapp"
+            | "marketplace"
+            | "plugin"
+            | "wallet"
+            | "purchases"
+    )
+}
+
+fn run_embedded_agent_command(
+    command_path: &[&str],
+    EmbeddedAgentArgs { args }: EmbeddedAgentArgs,
+) -> Result<(), String> {
+    let mut argv = Vec::with_capacity(command_path.len() + args.len() + 1);
+    argv.push(OsString::from("mahayana"));
+    argv.extend(command_path.iter().map(OsString::from));
+    argv.extend(args);
+    codex_cli::run_multitool_with_args(argv).map_err(|error| error.to_string())
 }
 
 fn run(codex_executable_path: Option<&Path>, cli: Cli) -> Result<(), String> {
@@ -216,6 +393,11 @@ fn run(codex_executable_path: Option<&Path>, cli: Cli) -> Result<(), String> {
             let response = runtime.execute(json!({"@type": "mahayana.conversation.list"}))?;
             print_conversations(&response)
         }),
+        Some(CliCommand::Capability { command }) => {
+            with_runtime(codex_executable_path, |runtime| {
+                capability_command(runtime, command)
+            })
+        }
         Some(CliCommand::History { conversation_id }) => {
             with_runtime(codex_executable_path, |runtime| {
                 let response = runtime.execute(json!({
@@ -240,6 +422,35 @@ fn run(codex_executable_path: Option<&Path>, cli: Cli) -> Result<(), String> {
                 interactive_chat(runtime, conversation_id)
             })
         }
+        Some(CliCommand::Exec(args)) => run_embedded_agent_command(&["exec"], args),
+        Some(CliCommand::Review(args)) => run_embedded_agent_command(&["review"], args),
+        Some(CliCommand::Mcp(args)) => run_embedded_agent_command(&["mcp"], args),
+        Some(CliCommand::McpServer(args)) => run_embedded_agent_command(&["mcp-server"], args),
+        Some(CliCommand::AppServer(args)) => run_embedded_agent_command(&["app-server"], args),
+        Some(CliCommand::RemoteControl(args)) => {
+            run_embedded_agent_command(&["remote-control"], args)
+        }
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        Some(CliCommand::App(args)) => run_embedded_agent_command(&["app"], args),
+        Some(CliCommand::Completion(args)) => run_embedded_agent_command(&["completion"], args),
+        Some(CliCommand::Update(args)) => run_embedded_agent_command(&["update"], args),
+        Some(CliCommand::Doctor(args)) => run_embedded_agent_command(&["doctor"], args),
+        Some(CliCommand::Sandbox(args)) => run_embedded_agent_command(&["sandbox"], args),
+        Some(CliCommand::Debug(args)) => run_embedded_agent_command(&["debug"], args),
+        Some(CliCommand::Apply(args)) => run_embedded_agent_command(&["apply"], args),
+        Some(CliCommand::Resume(args)) => run_embedded_agent_command(&["resume"], args),
+        Some(CliCommand::Archive(args)) => run_embedded_agent_command(&["archive"], args),
+        Some(CliCommand::Delete(args)) => run_embedded_agent_command(&["delete"], args),
+        Some(CliCommand::Unarchive(args)) => run_embedded_agent_command(&["unarchive"], args),
+        Some(CliCommand::Fork(args)) => run_embedded_agent_command(&["fork"], args),
+        Some(CliCommand::Cloud(args)) => run_embedded_agent_command(&["cloud"], args),
+        Some(CliCommand::ExecServer(args)) => run_embedded_agent_command(&["exec-server"], args),
+        Some(CliCommand::Features(args)) => run_embedded_agent_command(&["features"], args),
+        Some(CliCommand::Execpolicy(args)) => run_embedded_agent_command(&["execpolicy"], args),
+        Some(CliCommand::ResponsesApiProxy(args)) => {
+            run_embedded_agent_command(&["responses-api-proxy"], args)
+        }
+        Some(CliCommand::StdioToUds(args)) => run_embedded_agent_command(&["stdio-to-uds"], args),
         Some(CliCommand::Miniapp { args }) => miniapp_command(codex_executable_path, args),
         Some(CliCommand::Marketplace { command }) => marketplace_command(command),
         Some(CliCommand::Plugin { command }) => plugin_command(codex_executable_path, command),
@@ -251,11 +462,98 @@ fn run(codex_executable_path: Option<&Path>, cli: Cli) -> Result<(), String> {
     }
 }
 
+fn capability_command(runtime: &RuntimeHandle, command: CapabilityCommand) -> Result<(), String> {
+    match command {
+        CapabilityCommand::List { query, json } => {
+            let response = runtime.execute(json!({
+                "@type": "mahayana.capability.list",
+                "query": query,
+            }))?;
+            if json {
+                print_json(&response)
+            } else {
+                for capability in response
+                    .get("data")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                {
+                    println!(
+                        "{} {}",
+                        capability
+                            .get("mention")
+                            .and_then(Value::as_str)
+                            .unwrap_or(""),
+                        capability
+                            .get("title")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                    );
+                }
+                Ok(())
+            }
+        }
+        CapabilityCommand::Invoke {
+            capability_id,
+            text,
+        } => print_json(&runtime.execute(json!({
+            "@type": "mahayana.capability.invoke",
+            "capabilityId": capability_id,
+            "text": text.join(" "),
+        }))?),
+    }
+}
+
 fn marketplace_command(command: MarketplaceCommand) -> Result<(), String> {
     let client = MahayanaProductClient::default();
     let response = match command {
-        MarketplaceCommand::Browse => client.marketplace_browse(None),
-        MarketplaceCommand::Search { query } => client.marketplace_browse(Some(&query)),
+        MarketplaceCommand::Browse => client.marketplace_browse(None, Some("desktop")),
+        MarketplaceCommand::Search { query } => {
+            client.marketplace_browse(Some(&query), Some("desktop"))
+        }
+        MarketplaceCommand::Install {
+            plugin_id,
+            version,
+            repository,
+        } => {
+            let listing = client
+                .marketplace_browse(Some(&plugin_id), Some("desktop"))
+                .map_err(|error| error.to_string())?;
+            let plugin = listing
+                .get("plugins")
+                .and_then(Value::as_array)
+                .and_then(|plugins| {
+                    plugins.iter().find(|plugin| {
+                        plugin.get("pluginId").and_then(Value::as_str) == Some(&plugin_id)
+                    })
+                })
+                .ok_or_else(|| format!("市场中没有已审核插件 {plugin_id}"))?;
+            let version = version
+                .or_else(|| {
+                    plugin
+                        .get("latestVersion")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                })
+                .ok_or_else(|| "市场条目没有可安装版本".to_string())?;
+            let expected_sha256 = plugin
+                .get("packageSha256")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "市场条目缺少 packageSha256".to_string())?;
+            let archive = client
+                .download_marketplace_plugin(&plugin_id, &version, 50 * 1024 * 1024)
+                .map_err(|error| error.to_string())?;
+            let actual_sha256 = format!("{:x}", Sha256::digest(&archive));
+            if !actual_sha256.eq_ignore_ascii_case(expected_sha256) {
+                return Err("Pages/Worker 插件包哈希与市场回执不一致".into());
+            }
+            return print_json(&plugin_dev::install_marketplace_bundle(
+                &repository,
+                &plugin_id,
+                &version,
+                &archive,
+            )?);
+        }
     }
     .map_err(|error| error.to_string())?;
     print_json(&response)
@@ -278,10 +576,12 @@ fn plugin_command(
             name,
             repository,
             title,
+            profile,
         } => print_json(&plugin_dev::init_repository(
             &repository,
             &name,
             title.as_deref(),
+            profile,
         )?),
         PluginCommand::List {
             marketplace,
@@ -302,7 +602,7 @@ fn plugin_command(
         }
         PluginCommand::Info { plugin_id } => {
             let response = MahayanaProductClient::default()
-                .marketplace_browse(Some(&plugin_id))
+                .marketplace_browse(Some(&plugin_id), Some("desktop"))
                 .map_err(|error| error.to_string())?;
             print_json(&response)
         }
@@ -377,6 +677,9 @@ fn plugin_command(
             }
             run_codex_plugin(args)
         }
+        PluginCommand::Marketplace(args) => {
+            run_embedded_agent_command(&["plugin", "marketplace"], args)
+        }
         PluginCommand::Open { plugin_id } => with_runtime(codex_executable_path, |runtime| {
             interactive_chat(runtime, Some(format!("miniapp:{plugin_id}")))
         }),
@@ -400,7 +703,9 @@ fn plugin_command(
             })
         }
         PluginCommand::Validate { path } => print_json(&plugin_dev::validate_path(&path)?),
+        PluginCommand::Test { path } => print_json(&plugin_dev::test_path(&path)?),
         PluginCommand::Pack { path, output } => {
+            let path = plugin_dev::absolute_path(&path)?;
             LocalPlugin::load(&path).map_err(|error| error.to_string())?;
             let archive = pack_plugin_bundle_tar_gz(&path, 50 * 1024 * 1024)
                 .map_err(|error| error.to_string())?;
@@ -413,12 +718,35 @@ fn plugin_command(
             path,
             plugin_id,
             version,
+            deployment_url,
         } => {
+            let path = plugin_dev::absolute_path(&path)?;
             LocalPlugin::load(&path).map_err(|error| error.to_string())?;
+            plugin_dev::test_path(&path)?;
             let archive = pack_plugin_bundle_tar_gz(&path, 50 * 1024 * 1024)
                 .map_err(|error| error.to_string())?;
+            let package_size = archive.len() as u64;
+            let package_sha256 = format!("{:x}", Sha256::digest(&archive));
+            let platforms = plugin_dev::supported_marketplace_platforms(&path)?;
+            plugin_dev::prepare_site_distribution(
+                &path,
+                &plugin_id,
+                &version,
+                &package_sha256,
+                &archive,
+            )?;
+            let deployment_url = deployment_url
+                .map(Ok)
+                .unwrap_or_else(|| plugin_dev::deploy_plugin_site(&path))?;
             let response = MahayanaProductClient::default()
-                .publish_plugin(&plugin_id, &version, archive)
+                .publish_plugin(
+                    &plugin_id,
+                    &version,
+                    &deployment_url,
+                    &package_sha256,
+                    package_size,
+                    &platforms,
+                )
                 .map_err(|error| error.to_string())?;
             print_json(&response)
         }
@@ -426,7 +754,7 @@ fn plugin_command(
 }
 
 fn run_codex_plugin(args: Vec<String>) -> Result<(), String> {
-    let cli = PluginCli::try_parse_from(std::iter::once("codex plugin".to_string()).chain(args))
+    let cli = PluginCli::try_parse_from(std::iter::once("mahayana plugin".to_string()).chain(args))
         .map_err(|error| error.to_string())?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -519,10 +847,32 @@ fn login(args: Vec<String>) -> Result<(), String> {
     match args.first().map(String::as_str) {
         None | Some("alipay") => alipay_login(),
         Some("password") => password_login(&args[1..]),
+        Some("test") => test_account_login(&args[1..]),
         Some(other) => Err(format!(
-            "未知登录方式：{other}。使用 mahayana login alipay 或 mahayana login password <用户名>"
+            "未知登录方式：{other}。使用 mahayana login alipay、mahayana login password <用户名> 或 mahayana login test"
         )),
     }
+}
+
+fn test_account_login(args: &[String]) -> Result<(), String> {
+    let token = match args {
+        [] => std::env::var("MAHAYANA_TEST_ACCOUNT_TOKEN")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .map(Ok)
+            .unwrap_or_else(|| {
+                rpassword::prompt_password("测试账号访问令牌：").map_err(|error| error.to_string())
+            })?,
+        [mode] if mode == "--token-stdin" => read_line()?,
+        _ => {
+            return Err("用法：mahayana login test [--token-stdin]；令牌不得放在命令参数中".into());
+        }
+    };
+    MahayanaProductClient::default()
+        .store_test_account_session(&token)
+        .map_err(|error| error.to_string())?;
+    println!("测试账号 TestAccount 登录成功。会话已加密保存，AI 测试额度不设日常上限。");
+    Ok(())
 }
 
 fn password_login(args: &[String]) -> Result<(), String> {
@@ -658,10 +1008,27 @@ struct RuntimeHandle(u64);
 
 impl RuntimeHandle {
     fn create(codex_executable_path: Option<&Path>) -> Result<Self, String> {
-        Self::create_with_config(json!({
+        let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
+        let bundled_plugin_marketplace = find_bundled_plugin_marketplace(&cwd);
+        let use_codex_account = std::env::var("MAHAYANA_USE_CODEX_ACCOUNT").as_deref() == Ok("1");
+        let mut config = json!({
             "codexExecutablePath": codex_executable_path,
             "hostPlatform": "cli",
-        }))
+            "cwd": cwd,
+            "workspaceRoots": [cwd],
+            "bundledPluginMarketplace": bundled_plugin_marketplace,
+            "useCodexAccount": use_codex_account,
+        });
+        if use_codex_account && let Some(codex_home) = std::env::var_os("MAHAYANA_CODEX_HOME") {
+            config["codexHome"] = serde_json::to_value(PathBuf::from(codex_home))
+                .map_err(|error| error.to_string())?;
+        }
+        if let Ok(base_url) = std::env::var("MAHAYANA_RESPONSES_BASE_URL")
+            && !base_url.trim().is_empty()
+        {
+            config["model"]["baseUrl"] = Value::String(base_url);
+        }
+        Self::create_with_config(config)
     }
 
     fn create_with_config(config: Value) -> Result<Self, String> {
@@ -712,6 +1079,28 @@ impl RuntimeHandle {
     }
 }
 
+fn find_bundled_plugin_marketplace(cwd: &Path) -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(path) = std::env::var_os("MAHAYANA_BUNDLED_PLUGIN_MARKETPLACE") {
+        candidates.push(PathBuf::from(path));
+    }
+    candidates.push(cwd.join(".agents/plugins"));
+    if let Ok(executable) = std::env::current_exe()
+        && let Some(bin_dir) = executable.parent()
+    {
+        candidates.push(bin_dir.join("../share/mahayana/plugins"));
+        candidates.push(bin_dir.join("share/mahayana/plugins"));
+        candidates.push(bin_dir.join("../Resources/mahayana/share/mahayana/plugins"));
+    }
+    candidates.into_iter().find_map(|candidate| {
+        candidate
+            .join("marketplace.json")
+            .is_file()
+            .then(|| candidate.canonicalize().ok())
+            .flatten()
+    })
+}
+
 impl Drop for RuntimeHandle {
     fn drop(&mut self) {
         unsafe {
@@ -749,11 +1138,15 @@ fn send_and_collect(
         .and_then(Value::as_str)
         .ok_or_else(|| "Runtime 没有返回操作编号".to_string())?;
     let mut assistant = String::new();
+    let mut streamed_output = false;
     let mut usage_summary = None;
     loop {
         let Some(event) = runtime.receive(30_000)? else {
             continue;
         };
+        if std::env::var("MAHAYANA_TRACE_EVENTS").as_deref() == Ok("1") {
+            eprintln!("[mahayana:event] {}", redact_secrets(&event));
+        }
         match event.get("@type").and_then(Value::as_str) {
             Some("mahayana.message.delta")
                 if event.get("operationId").and_then(Value::as_str) == Some(operation_id) =>
@@ -766,6 +1159,7 @@ fn send_and_collect(
                 if print_stream {
                     print!("{delta}");
                     io::stdout().flush().map_err(|error| error.to_string())?;
+                    streamed_output |= !delta.is_empty();
                 }
             }
             Some("mahayana.message.completed")
@@ -779,7 +1173,12 @@ fn send_and_collect(
                         .and_then(|value| value.get("text"))
                         .and_then(Value::as_str)
                     {
-                        assistant = text.to_string();
+                        merge_completed_text(&mut assistant, text);
+                        if should_print_completed_text(print_stream, streamed_output, text) {
+                            print!("{text}");
+                            io::stdout().flush().map_err(|error| error.to_string())?;
+                            streamed_output = true;
+                        }
                     }
                     if print_stream {
                         println!();
@@ -818,6 +1217,96 @@ fn send_and_collect(
     }
 }
 
+fn merge_completed_text(assistant: &mut String, completed: &str) {
+    if !completed.is_empty() || assistant.is_empty() {
+        *assistant = completed.to_string();
+    }
+}
+
+fn should_print_completed_text(print_stream: bool, streamed_output: bool, completed: &str) -> bool {
+    print_stream && !streamed_output && !completed.is_empty()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Cli;
+    use super::merge_completed_text;
+    use super::should_print_completed_text;
+    use super::should_run_embedded_agent_cli;
+    use clap::CommandFactory;
+    use std::collections::BTreeSet;
+    use std::ffi::OsString;
+
+    fn args(values: &[&str]) -> Vec<OsString> {
+        values.iter().map(OsString::from).collect()
+    }
+
+    #[test]
+    fn embedded_help_uses_mahayana_command_name() {
+        let help = codex_cli::multitool_command()
+            .render_long_help()
+            .to_string();
+
+        assert!(help.contains("Usage: mahayana"));
+        assert!(!help.contains("Usage: codex"));
+    }
+
+    #[test]
+    fn every_visible_embedded_command_is_listed_by_mahayana_help() {
+        let product_commands = Cli::command()
+            .get_subcommands()
+            .filter(|command| !command.is_hide_set())
+            .map(|command| command.get_name().to_string())
+            .collect::<BTreeSet<_>>();
+        let missing_commands = codex_cli::multitool_command()
+            .get_subcommands()
+            .filter(|command| !command.is_hide_set())
+            .map(|command| command.get_name().to_string())
+            .filter(|command| !product_commands.contains(command))
+            .collect::<Vec<_>>();
+
+        assert!(
+            missing_commands.is_empty(),
+            "mahayana help is missing embedded commands: {missing_commands:?}"
+        );
+    }
+
+    #[test]
+    fn help_for_embedded_commands_routes_to_the_full_command_tree() {
+        assert!(should_run_embedded_agent_cli(&args(&["help", "exec"])));
+        assert!(should_run_embedded_agent_cli(&args(&["help", "review"])));
+        assert!(!should_run_embedded_agent_cli(&args(&["help"])));
+        assert!(!should_run_embedded_agent_cli(&args(&["help", "login"])));
+        assert!(!should_run_embedded_agent_cli(&args(&["--help"])));
+    }
+
+    #[test]
+    fn empty_completion_does_not_erase_collected_tool_result() {
+        let mut assistant = r#"{"ok":true}"#.to_string();
+
+        merge_completed_text(&mut assistant, "");
+
+        assert_eq!(assistant, r#"{"ok":true}"#);
+    }
+
+    #[test]
+    fn non_empty_completion_remains_authoritative() {
+        let mut assistant = "partial".to_string();
+
+        merge_completed_text(&mut assistant, "complete");
+
+        assert_eq!(assistant, "complete");
+    }
+
+    #[test]
+    fn completed_only_mcp_results_are_printed_once() {
+        assert!(should_print_completed_text(true, false, "tool result"));
+        assert!(!should_print_completed_text(true, true, "tool result"));
+        assert!(!should_print_completed_text(false, false, "tool result"));
+        assert!(!should_print_completed_text(true, false, ""));
+    }
+}
+
 fn format_usage_summary(event: &Value) -> Option<String> {
     let usage = event.get("usage")?;
     let last = usage.get("last")?;
@@ -853,7 +1342,7 @@ fn handle_approval(runtime: &RuntimeHandle, event: &Value) -> Result<(), String>
         event
             .get("title")
             .and_then(Value::as_str)
-            .unwrap_or("Codex 操作"),
+            .unwrap_or("大乘操作"),
         event.get("details").cloned().unwrap_or(Value::Null)
     );
     print!("允许？[y] 本次 / [a] 本会话 / [n] 拒绝 / [c] 取消：");

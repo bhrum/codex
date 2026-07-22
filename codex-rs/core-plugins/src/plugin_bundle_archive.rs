@@ -92,6 +92,9 @@ fn append_plugin_tree<W: Write>(
                 path.display()
             ))
         })?;
+        if should_exclude_plugin_archive_path(relative_path) {
+            continue;
+        }
         if file_type.is_dir() {
             archive.append_dir(relative_path, &path)?;
             append_plugin_tree(archive, plugin_root, &path)?;
@@ -105,6 +108,35 @@ fn append_plugin_tree<W: Write>(
         }
     }
     Ok(())
+}
+
+fn should_exclude_plugin_archive_path(relative_path: &Path) -> bool {
+    const PRIVATE_OR_GENERATED_DIRECTORIES: &[&str] = &[
+        ".git",
+        ".mahayana-distribution",
+        ".mahayana-state",
+        ".wrangler",
+        "node_modules",
+        "target",
+    ];
+    if relative_path.components().any(|component| {
+        let std::path::Component::Normal(name) = component else {
+            return false;
+        };
+        PRIVATE_OR_GENERATED_DIRECTORIES
+            .iter()
+            .any(|excluded| name == *excluded)
+    }) {
+        return true;
+    }
+    let Some(name) = relative_path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    name == ".DS_Store"
+        || (name == ".env"
+            || (name.starts_with(".env.")
+                && !name.ends_with(".example")
+                && !name.ends_with(".sample")))
 }
 
 fn archive_io_error(source: io::Error) -> PluginBundlePackError {
@@ -313,3 +345,26 @@ impl fmt::Display for ArchiveSizeLimitExceeded {
 }
 
 impl std::error::Error for ArchiveSizeLimitExceeded {}
+
+#[cfg(test)]
+mod tests {
+    use super::should_exclude_plugin_archive_path;
+    use std::path::Path;
+
+    #[test]
+    fn pack_excludes_runtime_state_caches_and_private_environment_files() {
+        assert!(should_exclude_plugin_archive_path(Path::new(
+            ".mahayana-state/plugins/app/state.json"
+        )));
+        assert!(should_exclude_plugin_archive_path(Path::new(
+            "server/node_modules/package/index.js"
+        )));
+        assert!(should_exclude_plugin_archive_path(Path::new(".env.local")));
+        assert!(!should_exclude_plugin_archive_path(Path::new(
+            ".env.example"
+        )));
+        assert!(!should_exclude_plugin_archive_path(Path::new(
+            "runtime/cli/plugin"
+        )));
+    }
+}

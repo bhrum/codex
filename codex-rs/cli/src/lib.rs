@@ -1,3 +1,12 @@
+extern crate self as codex_cli;
+
+#[path = "main.rs"]
+mod multitool;
+
+pub use multitool::multitool_command;
+pub use multitool::run as run_multitool;
+pub use multitool::run_with_args as run_multitool_with_args;
+
 pub(crate) mod debug_sandbox;
 mod exit_status;
 pub(crate) mod login;

@@ -2,27 +2,34 @@
 //!
 //! The same deterministic tool/state contract is hosted by the desktop CLI
 //! (direct command and stdio MCP modes) and by the browser/mobile WASM module.
-//! OS-only work is returned as an explicit `hostRequest`; the host remains the
-//! sole owner of sockets, process execution, secrets, and user confirmation.
+//! OS-only work is returned as an explicit `hostRequest` for embedded hosts.
+//! The desktop CLI may execute a bundled, narrowly-scoped native helper for
+//! capabilities that are explicitly provided by a plugin package.
 
-use mahayana_miniapp_protocol::{
-    AppSummary, CompiledContent, ContentCompiler, ContentSource, QuickAction, QuickReply,
-    SourceKind,
-};
-use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use mahayana_miniapp_protocol::AppSummary;
+use mahayana_miniapp_protocol::CompiledContent;
+use mahayana_miniapp_protocol::ContentCompiler;
+use mahayana_miniapp_protocol::ContentSource;
+use mahayana_miniapp_protocol::QuickAction;
+use mahayana_miniapp_protocol::QuickReply;
+use mahayana_miniapp_protocol::SourceKind;
+use serde::Deserialize;
+use serde::Serialize;
+use serde_json::Value;
+use serde_json::json;
 use std::collections::BTreeMap;
 
 pub const PROTOCOL_VERSION: &str = "2025-06-18";
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-pub const OFFICIAL_PLUGIN_IDS: [&str; 6] = [
+pub const OFFICIAL_PLUGIN_IDS: [&str; 7] = [
     "global-dharma",
     "faliu-flashcards",
     "platform-publish",
     "hermes-installer",
     "bot-father",
     "mahayana-assistant",
+    "chatgpt-auto-confirm",
 ];
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -156,6 +163,7 @@ impl OfficialMiniAppEngine {
             "hermes-installer" => self.call_hermes(tool_name, &arguments),
             "bot-father" => self.call_bot_father(tool_name, &arguments),
             "mahayana-assistant" => self.call_assistant(tool_name, &arguments),
+            "chatgpt-auto-confirm" => self.call_chatgpt_auto_confirm(tool_name, &arguments),
             _ => unreachable!("validated plugin id"),
         }
     }
@@ -541,8 +549,15 @@ impl OfficialMiniAppEngine {
             "create_plugin" => {
                 let name = normalize_plugin_name(required_string(arguments, "name")?);
                 let description = required_string(arguments, "description")?;
+                let profile = arguments
+                    .get("profile")
+                    .and_then(Value::as_str)
+                    .unwrap_or("portable");
+                if !matches!(profile, "portable" | "desktop-approval") {
+                    return Err("profile must be portable or desktop-approval".into());
+                }
                 let id = self.id("plugin");
-                let bundle = generated_bundle(&name, description);
+                let bundle = generated_bundle(&name, description, profile);
                 self.generated_plugins.insert(
                     id.clone(),
                     GeneratedPlugin {
@@ -633,6 +648,109 @@ impl OfficialMiniAppEngine {
         };
         Ok(outcome(&text, structured, Vec::new()))
     }
+
+    fn call_chatgpt_auto_confirm(
+        &mut self,
+        tool: &str,
+        arguments: &Value,
+    ) -> Result<ToolCallOutcome, String> {
+        let (text, capability, params, approval) = match tool {
+            "start" => {
+                let approve_all = arguments
+                    .get("approveAll")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(true);
+                let rules = arguments
+                    .get("rules")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                if rules.len() > 20
+                    || (!approve_all && rules.is_empty())
+                    || !rules.iter().all(|rule| {
+                        ["application", "action", "resource"].iter().all(|field| {
+                            rule.get(field)
+                                .and_then(Value::as_str)
+                                .map(str::trim)
+                                .is_some_and(|value| {
+                                    !value.is_empty()
+                                        && value != "*"
+                                        && value != ".*"
+                                        && value.len() <= 256
+                                })
+                        })
+                    })
+                {
+                    return Err(
+                        "请启用 approveAll 或提供 1-20 条 application/action/resource 精确规则"
+                            .to_string(),
+                    );
+                }
+                (
+                    "已请求大乘桌面宿主启动 ChatGPT 授权卡监听。",
+                    "desktop.chatgpt-approvals.start",
+                    json!({
+                        "rules": rules,
+                        "approveAll": approve_all,
+                        "intervalMs": arguments
+                            .get("intervalMs")
+                            .and_then(Value::as_u64)
+                            .unwrap_or(750)
+                    }),
+                    "required",
+                )
+            }
+            "stop" => (
+                "已请求停止 ChatGPT 授权卡监听。",
+                "desktop.chatgpt-approvals.stop",
+                json!({}),
+                "required",
+            ),
+            "status" => (
+                "已请求读取 ChatGPT 授权卡监听状态。",
+                "desktop.chatgpt-approvals.status",
+                json!({}),
+                "none",
+            ),
+            "scan_once" => (
+                "已请求立即扫描一次 ChatGPT 授权卡。",
+                "desktop.chatgpt-approvals.scan-once",
+                json!({}),
+                "required",
+            ),
+            "audit_log" => (
+                "已请求读取本机审计记录。",
+                "desktop.chatgpt-approvals.audit",
+                json!({
+                    "limit": arguments
+                        .get("limit")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(20)
+                }),
+                "none",
+            ),
+            "diagnose" => (
+                "已请求只读检查 ChatGPT 已加载的辅助功能结构。",
+                "desktop.chatgpt-approvals.diagnose",
+                json!({}),
+                "none",
+            ),
+            _ => unreachable!("validated tool"),
+        };
+        Ok(outcome(
+            text,
+            json!({
+                "handled": true,
+                "hostRequest": {
+                    "transport": "mcp-host-bridge",
+                    "capability": capability,
+                    "params": params,
+                    "approval": approval,
+                }
+            }),
+            Vec::new(),
+        ))
+    }
 }
 
 pub fn app_definition(plugin_id: &str) -> Option<AppDefinition> {
@@ -713,6 +831,20 @@ pub fn app_definition(plugin_id: &str) -> Option<AppDefinition> {
                 ("diagnose", "diagnose_plugin"),
             ]),
         ),
+        "chatgpt-auto-confirm" => (
+            "ChatGPT 自动确认",
+            "在后台自动确认 ChatGPT 已加载的所有已识别授权卡；不切换页面、不激活窗口、不移动鼠标",
+            chatgpt_auto_confirm_tools(),
+            command_map(&[
+                ("start", "start"),
+                ("stop", "stop"),
+                ("status", "status"),
+                ("scan", "scan_once"),
+                ("audit", "audit_log"),
+                ("diagnose", "diagnose"),
+                ("web", "web-serve"),
+            ]),
+        ),
         _ => return None,
     };
     Some(AppDefinition {
@@ -761,7 +893,7 @@ pub fn home_html(plugin_id: &str) -> Result<String, String> {
         .map(|name| format!(r#"<button data-tool="{name}">/{name}</button>"#))
         .collect::<String>();
     Ok(format!(
-        r#"<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'none'"><style>:root{{color-scheme:light dark}}body{{font:15px system-ui;margin:0;padding:20px;background:#101722;color:#edf3ff}}h1{{font-size:21px;margin:0 0 6px}}p{{color:#9eb0ca}}button{{margin:4px;border:1px solid #3d526f;border-radius:10px;padding:9px 12px;background:#182538;color:inherit}}pre{{white-space:pre-wrap;background:#0b111a;padding:12px;border-radius:10px}}</style></head><body><h1>{}</h1><p>{}</p><div>{buttons}</div><pre id="out">本地 CLI/WASM MCP App 已连接</pre><script>(()=>{{let id=0;const pending=new Map();const out=document.querySelector('#out');addEventListener('message',event=>{{const m=event.data;if(!m||m.jsonrpc!=='2.0')return;if(m.id!==undefined&&pending.has(m.id)){{pending.get(m.id)(m);pending.delete(m.id)}}if(m.method==='notifications/progress')out.textContent=`${{m.params?.message??'执行中'}} (${{m.params?.progress??0}}/${{m.params?.total??0}})`;if(m.method==='ui/notifications/tool-result')out.textContent=JSON.stringify(m.params,null,2)}});function call(name){{const requestId=++id;return new Promise(resolve=>{{pending.set(requestId,resolve);parent.postMessage({{jsonrpc:'2.0',id:requestId,method:'tools/call',params:{{name,arguments:{{}}}}}},'*')}})}}document.querySelectorAll('[data-tool]').forEach(button=>button.onclick=async()=>{{out.textContent='执行中…';const response=await call(button.dataset.tool);out.textContent=JSON.stringify(response.result??response.error,null,2)}})}})()</script></body></html>"#,
+        r#"<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'none'"><style>:root{{color-scheme:light dark}}body{{font:15px system-ui;margin:0;padding:20px;background:#101722;color:#edf3ff}}h1{{font-size:21px;margin:0 0 6px}}p{{color:#9eb0ca}}button{{margin:4px;border:1px solid #3d526f;border-radius:10px;padding:9px 12px;background:#182538;color:inherit}}pre{{white-space:pre-wrap;background:#0b111a;padding:12px;border-radius:10px}}</style></head><body><h1>{}</h1><p>{}</p><div>{buttons}</div><pre id="out">本地 CLI/WASM MCP App 已连接</pre><script>(()=>{{let id=0;const pending=new Map();const out=document.querySelector('#out');addEventListener('message',event=>{{const m=event.data;if(!m||m.jsonrpc!=='2.0')return;const isResponse=m.result!==undefined||m.error!==undefined;if(isResponse&&m.id!==undefined&&pending.has(m.id)){{pending.get(m.id)(m);pending.delete(m.id)}}if(m.method==='notifications/progress')out.textContent=`${{m.params?.message??'执行中'}} (${{m.params?.progress??0}}/${{m.params?.total??0}})`;if(m.method==='ui/notifications/tool-result')out.textContent=JSON.stringify(m.params,null,2)}});function call(name){{const requestId=++id;return new Promise(resolve=>{{pending.set(requestId,resolve);parent.postMessage({{jsonrpc:'2.0',id:requestId,method:'tools/call',params:{{name,arguments:{{}}}}}},'*')}})}}document.querySelectorAll('[data-tool]').forEach(button=>button.onclick=async()=>{{out.textContent='执行中…';const response=await call(button.dataset.tool);out.textContent=JSON.stringify(response.result??response.error,null,2)}})}})()</script></body></html>"#,
         escape_html(&app.title),
         escape_html(&app.description)
     ))
@@ -922,16 +1054,25 @@ fn normalize_plugin_name(value: &str) -> String {
     normalized.trim_matches('-').to_string()
 }
 
-fn generated_bundle(name: &str, description: &str) -> Value {
+fn generated_bundle(name: &str, description: &str, profile: &str) -> Value {
     let local = format!("{name}-local");
     let wasm = format!("{name}-wasm");
     let http = format!("{name}-http");
+    let desktop_approval = profile == "desktop-approval";
     json!({
+        "profile": profile,
         "manifest": {"name":name,"version":"0.1.0","description":description,"mcpServers":"./.mcp.json","runtimeVariants":[
             {"id":"local-cli","server":local,"platforms":["cli","desktop"],"priority":300},
             {"id":"local-wasm","server":wasm,"platforms":["mobile","web"],"priority":250},
             {"id":"account-http","server":http,"platforms":["cli","desktop","mobile","web"],"priority":100}
         ]},
+        "mahayana": {
+            "permissions": if desktop_approval {
+                json!(["mcp.call", "storage.local", "desktop.accessibility", "desktop.chatgpt.approvals"])
+            } else {
+                json!(["mcp.call", "storage.local"])
+            }
+        },
         "files": [".codex-plugin/plugin.json",".mahayana/plugin.json",".mcp.json","runtime/cli/fabushi-plugin-cli","runtime/wasm/plugin.wasm","ui/home.html","test/contract.test.js"]
     })
 }
@@ -1216,7 +1357,11 @@ fn bot_father_tools() -> Vec<Value> {
         tool(
             "create_plugin",
             "创建可移植 Codex 插件包",
-            json!({"name":{"type":"string"},"description":{"type":"string"}}),
+            json!({
+                "name":{"type":"string"},
+                "description":{"type":"string"},
+                "profile":{"type":"string","enum":["portable","desktop-approval"],"default":"portable"}
+            }),
             &["name", "description"],
             annotations(false, false, false),
             false,
@@ -1263,6 +1408,75 @@ fn bot_father_tools() -> Vec<Value> {
         ),
     ]
 }
+
+fn chatgpt_auto_confirm_tools() -> Vec<Value> {
+    let rule = json!({
+        "type":"object",
+        "properties":{
+            "application":{"type":"string","minLength":1},
+            "action":{"type":"string","minLength":1},
+            "resource":{"type":"string","minLength":1}
+        },
+        "required":["application","action","resource"],
+        "additionalProperties":false
+    });
+    vec![
+        home_tool(),
+        tool(
+            "start",
+            "启动严格后台监听；approveAll 自动确认已加载的所有已识别授权卡，也可使用精确规则",
+            json!({
+                "rules":{"type":"array","maxItems":20,"default":[],"items":rule},
+                "approveAll":{"type":"boolean","default":true},
+                "intervalMs":{"type":"integer","minimum":400,"maximum":5000,"default":750}
+            }),
+            &[],
+            annotations(false, false, false),
+            false,
+        ),
+        tool(
+            "stop",
+            "停止自动确认监听",
+            json!({}),
+            &[],
+            annotations(false, false, false),
+            false,
+        ),
+        tool(
+            "status",
+            "读取监听、权限和规则状态",
+            json!({}),
+            &[],
+            annotations(true, false, false),
+            false,
+        ),
+        tool(
+            "scan_once",
+            "立即后台扫描一次已加载的授权卡",
+            json!({}),
+            &[],
+            annotations(false, false, false),
+            false,
+        ),
+        tool(
+            "audit_log",
+            "读取仅保存在本机的最近审计记录",
+            json!({"limit":{"type":"integer","minimum":1,"maximum":100,"default":20}}),
+            &[],
+            annotations(true, false, false),
+            false,
+        ),
+        tool(
+            "diagnose",
+            "只读检查 ChatGPT 已加载的辅助功能结构",
+            json!({}),
+            &[],
+            annotations(true, false, false),
+            false,
+        ),
+    ]
+}
+
 fn assistant_tools() -> Vec<Value> {
     vec![
         home_tool(),
@@ -1460,6 +1674,80 @@ mod tests {
                 .and_then(Value::as_str),
             Some("network.send")
         );
+    }
+
+    #[test]
+    fn chatgpt_auto_confirm_delegates_only_scoped_rules_to_the_host() {
+        let mut engine = OfficialMiniAppEngine::default();
+        let started = engine
+            .call_tool(
+                "chatgpt-auto-confirm",
+                "start",
+                json!({
+                    "rules":[{
+                        "application":"GitHub",
+                        "action":"Enable auto-merge",
+                        "resource":"bhrumom/fabushi"
+                    }]
+                }),
+            )
+            .unwrap();
+        assert_eq!(
+            started
+                .result
+                .pointer("/structuredContent/hostRequest/capability")
+                .and_then(Value::as_str),
+            Some("desktop.chatgpt-approvals.start")
+        );
+        assert_eq!(
+            started
+                .result
+                .pointer("/structuredContent/hostRequest/approval")
+                .and_then(Value::as_str),
+            Some("required")
+        );
+
+        let status = engine
+            .call_tool("chatgpt-auto-confirm", "status", json!({}))
+            .unwrap();
+        assert_eq!(
+            status
+                .result
+                .pointer("/structuredContent/hostRequest/approval")
+                .and_then(Value::as_str),
+            Some("none")
+        );
+    }
+
+    #[test]
+    fn chatgpt_auto_confirm_defaults_to_all_recognized_approvals() {
+        let mut engine = OfficialMiniAppEngine::default();
+        let started = engine
+            .call_tool("chatgpt-auto-confirm", "start", json!({}))
+            .unwrap();
+        assert_eq!(
+            started
+                .result
+                .pointer("/structuredContent/hostRequest/params/approveAll")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            started
+                .result
+                .pointer("/structuredContent/hostRequest/params/rules")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn mcp_app_ui_does_not_treat_its_outbound_request_as_a_response() {
+        let html = home_html("chatgpt-auto-confirm").unwrap();
+        assert!(html.contains("const isResponse="));
+        assert!(html.contains("isResponse&&m.id!==undefined&&pending.has(m.id)"));
+        assert!(!html.contains("if(m.id!==undefined&&pending.has(m.id))"));
     }
 
     #[test]

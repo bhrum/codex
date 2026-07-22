@@ -145,34 +145,118 @@ impl MahayanaProductClient {
         &self.session_path
     }
 
-    pub fn marketplace_browse(&self, query: Option<&str>) -> Result<Value, ProductError> {
-        let query = query
-            .map(str::trim)
-            .filter(|query| !query.is_empty())
-            .map(|query| vec![("q", query)])
-            .unwrap_or_default();
+    /// Stores the environment-provisioned smoke-test credential in the same
+    /// encrypted Mahayana session backend used by normal account logins. The
+    /// credential is never accepted as a CLI argument or returned to callers.
+    pub fn store_test_account_session(&self, token: &str) -> Result<(), ProductError> {
+        let token = safe_test_account_token(token)?;
+        self.save_session(&json!({
+            "accessToken": token,
+            "provider": "test",
+            "username": "TestAccount",
+            "user": {
+                "id": "user:test_account",
+                "userId": "user:test_account",
+                "username": "TestAccount",
+                "membership": {"type": "lifetime", "active": true},
+                "isTestAccount": true,
+            },
+        }))
+    }
+
+    pub fn marketplace_browse(
+        &self,
+        query: Option<&str>,
+        platform: Option<&str>,
+    ) -> Result<Value, ProductError> {
+        let query = query.map(str::trim).filter(|query| !query.is_empty());
+        let platform = platform.map(safe_marketplace_platform).transpose()?;
+        let mut parameters = Vec::new();
+        if let Some(query) = query {
+            parameters.push(("q", query));
+        }
+        if let Some(platform) = platform {
+            parameters.push(("platform", platform));
+        }
         let token = self.optional_authorization_token(&Value::Null)?;
-        self.get_json("/v1/marketplace/plugins", &query, token.as_deref())
+        self.get_json("/v1/marketplace/plugins", &parameters, token.as_deref())
+    }
+
+    pub fn download_marketplace_plugin(
+        &self,
+        plugin_id: &str,
+        version: &str,
+        max_bytes: usize,
+    ) -> Result<Vec<u8>, ProductError> {
+        let plugin_id = safe_path_identifier(plugin_id, "pluginId")?;
+        let version = safe_path_identifier(version, "version")?;
+        let token = self.optional_authorization_token(&Value::Null)?;
+        let client = http_client()?;
+        let mut request = client
+            .get(format!(
+                "{}/v1/marketplace/plugins/{plugin_id}/releases/{version}/download",
+                self.api_base_url
+            ))
+            .header("Accept", "application/gzip, application/octet-stream");
+        if let Some(token) = token {
+            request = request.bearer_auth(token);
+        }
+        let response = request
+            .send()
+            .map_err(|error| ProductError::Transport(error.to_string()))?;
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
+            let message = response
+                .text()
+                .unwrap_or_else(|_| "marketplace download failed".to_string());
+            return Err(ProductError::HttpStatus { status, message });
+        }
+        if response
+            .content_length()
+            .is_some_and(|length| length > max_bytes as u64)
+        {
+            return Err(ProductError::Response(
+                "marketplace plugin package exceeds the local size limit".into(),
+            ));
+        }
+        let bytes = response
+            .bytes()
+            .map_err(|error| ProductError::Transport(error.to_string()))?
+            .to_vec();
+        if bytes.len() > max_bytes {
+            return Err(ProductError::Response(
+                "marketplace plugin package exceeds the local size limit".into(),
+            ));
+        }
+        Ok(bytes)
     }
 
     pub fn publish_plugin(
         &self,
         plugin_id: &str,
         version: &str,
-        archive: Vec<u8>,
+        deployment_url: &str,
+        package_sha256: &str,
+        package_size: u64,
+        platforms: &[String],
     ) -> Result<Value, ProductError> {
         let plugin_id = safe_path_identifier(plugin_id, "pluginId")?;
         let version = non_empty(version, "version")?;
+        let deployment_url = https_deployment_url(deployment_url)?;
+        let package_sha256 = safe_sha256(package_sha256)?;
+        let platforms = safe_marketplace_platforms(platforms)?;
         let token = self.authorization_token(&Value::Null)?;
-        let filename = format!("{plugin_id}-{version}.tar.gz");
-        let archive = reqwest::blocking::multipart::Part::bytes(archive)
-            .file_name(filename)
-            .mime_str("application/gzip")
-            .map_err(|error| ProductError::Configuration(error.to_string()))?;
         let form = reqwest::blocking::multipart::Form::new()
             .text("pluginId", plugin_id.to_string())
             .text("version", version.to_string())
-            .part("package", archive);
+            .text("deploymentUrl", deployment_url)
+            .text("packageSha256", package_sha256.to_string())
+            .text("packageSize", package_size.to_string())
+            .text(
+                "platforms",
+                serde_json::to_string(&platforms)
+                    .map_err(|error| ProductError::Configuration(error.to_string()))?,
+            );
         let client = http_client()?;
         decode_response(
             client
@@ -520,6 +604,7 @@ impl MahayanaProductClient {
     fn alipay_poll(&self, request: &Value) -> Result<Value, ProductError> {
         let state = required_string(request, "state")?;
         let response = self.get_json("/api/auth/alipay/cli-session", &[("state", state)], None)?;
+        let response = normalize_alipay_cli_response(response);
         if response.get("status").and_then(Value::as_str) == Some("complete") {
             self.store_login_response(&response, "alipay")?;
         }
@@ -836,6 +921,69 @@ impl MahayanaProductClient {
     }
 }
 
+fn https_deployment_url(value: &str) -> Result<String, ProductError> {
+    let mut url = url::Url::parse(value.trim())
+        .map_err(|_| ProductError::InvalidParameter("deploymentUrl"))?;
+    if url.scheme() != "https"
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.host_str().is_none()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(ProductError::InvalidParameter("deploymentUrl"));
+    }
+    let host = url.host_str().unwrap_or_default().to_ascii_lowercase();
+    if host == "localhost" || host.ends_with(".localhost") || host == "127.0.0.1" || host == "::1" {
+        return Err(ProductError::InvalidParameter("deploymentUrl"));
+    }
+    let normalized = url.path().trim_end_matches('/').to_string();
+    url.set_path(&normalized);
+    Ok(url.to_string().trim_end_matches('/').to_string())
+}
+
+fn safe_sha256(value: &str) -> Result<&str, ProductError> {
+    let value = value.trim();
+    if value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        Ok(value)
+    } else {
+        Err(ProductError::InvalidParameter("packageSha256"))
+    }
+}
+
+fn safe_marketplace_platform(value: &str) -> Result<&str, ProductError> {
+    match value.trim() {
+        "cli" => Ok("cli"),
+        "desktop" => Ok("desktop"),
+        "mobile" => Ok("mobile"),
+        "web" => Ok("web"),
+        _ => Err(ProductError::InvalidParameter("platform")),
+    }
+}
+
+fn safe_marketplace_platforms(platforms: &[String]) -> Result<Vec<&str>, ProductError> {
+    let mut normalized = Vec::new();
+    for platform in platforms {
+        let platform = safe_marketplace_platform(platform)?;
+        if !normalized.contains(&platform) {
+            normalized.push(platform);
+        }
+    }
+    if normalized.is_empty() {
+        return Err(ProductError::InvalidParameter("platforms"));
+    }
+    Ok(normalized)
+}
+
+fn safe_test_account_token(value: &str) -> Result<&str, ProductError> {
+    let value = value.trim();
+    if (32..=512).contains(&value.len()) && value.bytes().all(|byte| byte.is_ascii_graphic()) {
+        Ok(value)
+    } else {
+        Err(ProductError::InvalidParameter("testAccountToken"))
+    }
+}
+
 fn account_session_secret_name() -> Result<SecretName, ProductError> {
     SecretName::new(MAHAYANA_ACCOUNT_SESSION_SECRET).map_err(secrets_error)
 }
@@ -1040,6 +1188,23 @@ fn access_token(value: &Value) -> Option<&str> {
     optional_string(value, "accessToken")
 }
 
+fn normalize_alipay_cli_response(mut response: Value) -> Value {
+    // Older account workers returned the one-time CLI credential as `token`,
+    // while shared sessions deliberately accept only `accessToken`. Normalize
+    // only this trusted completed response instead of weakening the general
+    // authorization parser.
+    if response.get("status").and_then(Value::as_str) == Some("complete")
+        && response.get("accessToken").is_none()
+        && let Some(token) = optional_string(&response, "token").map(str::to_string)
+    {
+        response["accessToken"] = Value::String(token);
+        if let Some(object) = response.as_object_mut() {
+            object.remove("token");
+        }
+    }
+    response
+}
+
 fn required_identifier(request: &Value, name: &'static str) -> Result<String, ProductError> {
     match request.get(name) {
         Some(Value::String(value)) if !value.trim().is_empty() => Ok(value.trim().to_string()),
@@ -1202,6 +1367,45 @@ mod tests {
     }
 
     #[test]
+    fn marketplace_deployment_metadata_requires_public_https_and_sha256() {
+        assert_eq!(
+            https_deployment_url("https://plugin.example/"),
+            Ok("https://plugin.example".to_string())
+        );
+        assert_eq!(
+            https_deployment_url("http://localhost:8787"),
+            Err(ProductError::InvalidParameter("deploymentUrl"))
+        );
+        assert!(safe_sha256(&"a".repeat(64)).is_ok());
+        assert_eq!(
+            safe_sha256("not-a-digest"),
+            Err(ProductError::InvalidParameter("packageSha256"))
+        );
+        assert_eq!(safe_marketplace_platform("desktop"), Ok("desktop"));
+        assert_eq!(
+            safe_marketplace_platform("android"),
+            Err(ProductError::InvalidParameter("platform"))
+        );
+        assert_eq!(
+            safe_marketplace_platforms(&["desktop".into(), "desktop".into(), "cli".into()]),
+            Ok(vec!["desktop", "cli"])
+        );
+    }
+
+    #[test]
+    fn test_account_tokens_must_be_secret_strength_and_never_contain_whitespace() {
+        assert!(safe_test_account_token(&"a".repeat(64)).is_ok());
+        assert_eq!(
+            safe_test_account_token("short"),
+            Err(ProductError::InvalidParameter("testAccountToken"))
+        );
+        assert_eq!(
+            safe_test_account_token(&format!("{} token", "a".repeat(32))),
+            Err(ProductError::InvalidParameter("testAccountToken"))
+        );
+    }
+
+    #[test]
     fn ui_sessions_never_expose_account_credentials_or_legacy_token_aliases() {
         assert!(access_token(&json!({"token": "legacy"})).is_none());
         let session = typed_session(
@@ -1220,5 +1424,22 @@ mod tests {
         assert!(session.get("token").is_none());
         assert!(session.get("accessToken").is_none());
         assert!(session.get("refreshToken").is_none());
+    }
+
+    #[test]
+    fn completed_alipay_cli_tokens_are_normalized_without_weakening_auth_parsing() {
+        let normalized = normalize_alipay_cli_response(json!({
+            "status": "complete",
+            "token": "one-time-access",
+        }));
+        assert_eq!(access_token(&normalized), Some("one-time-access"));
+        assert!(normalized.get("token").is_none());
+
+        let pending = normalize_alipay_cli_response(json!({
+            "status": "pending",
+            "token": "not-yet-valid",
+        }));
+        assert!(access_token(&pending).is_none());
+        assert_eq!(pending["token"], "not-yet-valid");
     }
 }

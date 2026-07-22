@@ -40,6 +40,7 @@ telemetry = ["mahayana-runtime-core/telemetry"]
 [dependencies]
 async-trait.workspace = true
 codex-protocol = { workspace = true, optional = true }
+fabushi-official-miniapps.workspace = true
 fabushi-telegram-runtime = { path = "../providers/telegram-runtime" }
 mahayana-agent.workspace = true
 mahayana-agent-codex = { path = "../mahayana-agent-codex", optional = true }

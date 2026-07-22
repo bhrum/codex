@@ -57,7 +57,7 @@ pub fn new_approval_decision_cell(
                     vec![
                         actor.subject().into(),
                         "approved".bold(),
-                        " codex to run ".into(),
+                        " mahayana to run ".into(),
                         Span::from(snippet).dim(),
                         " this time".bold(),
                     ]

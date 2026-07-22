@@ -74,7 +74,11 @@ impl UpdateAction {
 
 #[cfg(not(debug_assertions))]
 pub fn get_update_action() -> Option<UpdateAction> {
-    UpdateAction::from_install_context(InstallContext::current())
+    // The inherited install-context actions all target the upstream OpenAI Codex
+    // distribution. Mahayana must never offer or execute those commands because
+    // they would update a different product. A Mahayana-native release channel
+    // can replace this guard once its installer contract is available.
+    None
 }
 
 #[cfg(test)]

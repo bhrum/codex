@@ -73,6 +73,7 @@ pub(crate) mod utils;
 pub use mention_syntax::PLUGIN_TEXT_MENTION_SIGIL;
 pub use mention_syntax::TOOL_MENTION_SIGIL;
 pub use utils::path_utils;
+pub mod plugin_workbench;
 pub(crate) mod plugins;
 #[doc(hidden)]
 pub(crate) mod prompt_debug;

@@ -1,4 +1,4 @@
-//! Implements the `codex doctor` diagnostic report.
+//! Implements the `mahayana doctor` diagnostic report.
 //!
 //! Doctor is intentionally read-mostly: checks inspect the current installation,
 //! configuration, authentication, terminal, state paths, and bounded reachability
@@ -66,14 +66,23 @@ use http::HeaderValue;
 use serde::Serialize;
 use supports_color::Stream;
 
+#[path = "doctor/background.rs"]
 mod background;
+#[path = "doctor/git.rs"]
 mod git;
+#[path = "doctor/output.rs"]
 mod output;
+#[path = "doctor/progress.rs"]
 mod progress;
+#[path = "doctor/runtime.rs"]
 mod runtime;
+#[path = "doctor/system.rs"]
 mod system;
+#[path = "doctor/thread_inventory.rs"]
 mod thread_inventory;
+#[path = "doctor/title.rs"]
 mod title;
+#[path = "doctor/updates.rs"]
 mod updates;
 
 use background::background_server_check;
@@ -143,7 +152,7 @@ const TMUX_OPTION_NAMES: &[&str] = &[
 const NARROW_TERMINAL_COLUMNS: u16 = 80;
 const NARROW_TERMINAL_ROWS: u16 = 24;
 
-/// Options for building a local Codex diagnostic report.
+/// Options for building a local Mahayana diagnostic report.
 ///
 /// The command always runs the full bounded diagnostic set. Human output includes
 /// detailed diagnostics by default; --summary keeps the terminal output compact.
@@ -301,7 +310,7 @@ impl DoctorCheck {
 
 /// Builds, renders, and exits according to the current doctor report.
 ///
-/// This is the CLI entry point for codex doctor. It does not repair issues;
+/// This is the CLI entry point for mahayana doctor. It does not repair issues;
 /// failures are represented in the report and cause a non-zero process exit so
 /// scripts can distinguish a clean environment from one that needs attention.
 pub async fn run_doctor(
@@ -452,7 +461,7 @@ async fn build_report(
                             "config could not be loaded",
                         )
                         .detail(err.to_string())
-                        .remediation("Fix the reported config error, then rerun codex doctor.")
+                        .remediation("Fix the reported config error, then rerun mahayana doctor.")
                     })
                 },
                 async { run_sync_check("network", progress.clone(), network_check) },
@@ -517,7 +526,7 @@ async fn load_config(
         .harness_overrides(overrides)
         .build()
         .await
-        .context("failed to load Codex config")
+        .context("failed to load Mahayana config")
 }
 
 fn config_overrides_from_interactive(
@@ -552,7 +561,7 @@ fn config_overrides_from_interactive(
     }
 }
 
-/// JSON support report emitted by `codex doctor --json`.
+/// JSON support report emitted by `mahayana doctor --json`.
 ///
 /// The report is keyed by check id so support tooling can fetch paths like
 /// `checks["terminal.metadata"]` without scanning arrays. Human rendering can
@@ -813,14 +822,14 @@ fn installation_check(show_details: bool) -> DoctorCheck {
     let mut remediation = None;
 
     if path_entries.len() > 1 {
-        details.push(format!("PATH codex entries: {}", path_entries.len()));
+        details.push(format!("PATH Mahayana entries: {}", path_entries.len()));
     }
     if show_details || path_entries.len() > 1 {
         details.extend(
             path_entries
                 .iter()
                 .enumerate()
-                .map(|(index, path)| format!("PATH codex #{}: {path}", index + 1)),
+                .map(|(index, path)| format!("PATH Mahayana #{}: {path}", index + 1)),
         );
     }
 
@@ -851,7 +860,7 @@ fn installation_check(show_details: bool) -> DoctorCheck {
                 status = status.max(CheckStatus::Warning);
                 summary = "npm-managed launch is missing package-root provenance".to_string();
                 remediation = Some(
-                    "Reinstall or update Codex so the JS shim provides CODEX_MANAGED_PACKAGE_ROOT."
+                    "Reinstall or update Mahayana so the embedded package provides CODEX_MANAGED_PACKAGE_ROOT."
                         .to_string(),
                 );
             }
@@ -1244,8 +1253,8 @@ fn auth_check(config: &Config) -> DoctorCheck {
             let mut check =
                 DoctorCheck::new("auth.credentials", "auth", status, summary).details(details);
             if status == CheckStatus::Fail {
-                check =
-                    check.remediation("Run codex login again or provide a supported auth env var.");
+                check = check
+                    .remediation("Run mahayana login again or provide a supported auth env var.");
             }
             check
         }
@@ -1260,10 +1269,10 @@ fn auth_check(config: &Config) -> DoctorCheck {
             "auth.credentials",
             "auth",
             CheckStatus::Fail,
-            "no Codex credentials were found",
+            "no Mahayana credentials were found",
         )
         .details(details)
-        .remediation("Run codex login or provide an API key through a supported auth env var."),
+        .remediation("Run mahayana login or provide an API key through a supported auth env var."),
         Err(err) => DoctorCheck::new(
             "auth.credentials",
             "auth",
@@ -1271,7 +1280,7 @@ fn auth_check(config: &Config) -> DoctorCheck {
             "stored credentials could not be read",
         )
         .detail(err.to_string())
-        .remediation("Fix auth storage access or run codex login again."),
+        .remediation("Fix auth storage access or run mahayana login again."),
     }
 }
 
@@ -3516,7 +3525,7 @@ mod tests {
         let check = provider_specific_auth_check(
             /*requires_openai_auth*/ false,
             Some("PROVIDER_API_KEY"),
-            Some("Set PROVIDER_API_KEY before running Codex."),
+            Some("Set PROVIDER_API_KEY before running Mahayana."),
             Vec::new(),
             |_| false,
         )
@@ -3529,7 +3538,7 @@ mod tests {
         );
         assert_eq!(
             check.remediation,
-            Some("Set PROVIDER_API_KEY before running Codex.".to_string())
+            Some("Set PROVIDER_API_KEY before running Mahayana.".to_string())
         );
     }
 

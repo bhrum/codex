@@ -698,9 +698,11 @@ impl ConversationProvider for MiniAppConversationProvider {
                 return Ok(());
             }
         }
-        let prompt = format!(
-            "你正在“{}”MCP 插件的隔离会话中。只能调用 Server `{}` 的 MCP Tools。用户消息：\n{}",
-            definition.title, session.server, chat_message,
+        let prompt = mcp_app_agent_prompt(
+            &definition.plugin_id,
+            &definition.title,
+            &session.server,
+            &chat_message,
         );
         self.backend
             .send_message(
@@ -743,6 +745,17 @@ impl ConversationProvider for MiniAppConversationProvider {
             .await
             .map_err(agent_error)
     }
+}
+
+fn mcp_app_agent_prompt(plugin_id: &str, title: &str, server: &str, message: &str) -> String {
+    if plugin_id == "bot-father" {
+        return format!(
+            "你正在“{title}”Codex 插件工作台中。结合 Server `{server}` 的 MCP Tools 与当前 Codex 工作区工具，实际生成、诊断、修复、测试、打包和发布插件。不要只返回示例或状态。用户消息：\n{message}"
+        );
+    }
+    format!(
+        "你正在“{title}”MCP 插件的隔离会话中。只能调用 Server `{server}` 的 MCP Tools。用户消息：\n{message}"
+    )
 }
 
 impl MiniAppConversationProvider {
@@ -1123,6 +1136,15 @@ mod tests {
     use mahayana_core::AgentThreadId;
     use mahayana_core::ApprovalDecision;
     use mahayana_core::ApprovalId;
+
+    #[test]
+    fn bot_father_prompt_uses_codex_workspace_orchestration() {
+        let prompt =
+            mcp_app_agent_prompt("bot-father", "Bot Father", "bot-father-local", "修复插件");
+        assert!(prompt.contains("Codex 插件工作台"));
+        assert!(prompt.contains("实际生成、诊断、修复、测试、打包和发布"));
+        assert!(!prompt.contains("只能调用"));
+    }
 
     struct EchoAgent;
 
