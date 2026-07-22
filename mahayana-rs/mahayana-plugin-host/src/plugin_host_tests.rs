@@ -99,6 +99,8 @@ fn official_plugins_use_the_codex_manifest_and_mahayana_extension_together() {
         plugin_names,
         vec![
             "bot-father",
+            "chatgpt-auto-confirm",
+            "computer-cleaner",
             "faliu-flashcards",
             "global-dharma",
             "hermes-installer",
