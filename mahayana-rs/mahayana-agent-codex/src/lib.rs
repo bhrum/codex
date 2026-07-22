@@ -1696,10 +1696,12 @@ impl AgentBackend for CodexAgentBackend {
         };
         debug_plugin_inheritance(
             "required workspace MCP servers",
-            thread_mcp_configs.iter().filter_map(|(name, server)| {
-                (server.get("required").and_then(Value::as_bool) == Some(true))
-                    .then(|| name.clone())
-            }),
+            thread_mcp_configs
+                .iter()
+                .filter(|(_, server)| {
+                    server.get("required").and_then(Value::as_bool) == Some(true)
+                })
+                .map(|(name, _)| name.clone()),
         );
         let mut config = HashMap::new();
         config.insert(

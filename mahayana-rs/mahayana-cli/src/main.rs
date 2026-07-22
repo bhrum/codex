@@ -4,8 +4,6 @@ use clap::Subcommand;
 use codex_cli::plugin_cmd::PluginCli;
 use codex_cli::plugin_cmd::PluginSubcommand;
 use codex_core_plugins::plugin_bundle_archive::pack_plugin_bundle_tar_gz;
-use mahayana_core::ConversationId;
-use mahayana_core::RuntimeCommand;
 use mahayana_plugin_host::LocalPlugin;
 use mahayana_product::MahayanaProductClient;
 use mahayana_product::redact_secrets;
@@ -1228,6 +1226,7 @@ fn should_print_completed_text(print_stream: bool, streamed_output: bool, comple
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::Cli;
     use super::merge_completed_text;

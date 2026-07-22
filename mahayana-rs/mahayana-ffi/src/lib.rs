@@ -200,9 +200,9 @@ fn build_runtime(create: RuntimeCreateConfig) -> Result<MahayanaRuntime, String>
             codex_home,
             bundled_plugin_marketplace: create.bundled_plugin_marketplace,
             bundled_plugin_ids: mini_apps.iter().map(|app| app.plugin_id.clone()).collect(),
-            inherit_installed_plugins: create.inherit_installed_plugins.unwrap_or_else(|| {
-                matches!(runtime_config.build_profile, BuildProfile::DesktopFull) && !cfg!(test)
-            }),
+            inherit_installed_plugins: create.inherit_installed_plugins.unwrap_or(
+                matches!(runtime_config.build_profile, BuildProfile::DesktopFull) && !cfg!(test),
+            ),
             cwd,
             workspace_roots,
             model: runtime_config.model.model.clone(),
