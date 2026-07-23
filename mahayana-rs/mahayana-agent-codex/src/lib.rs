@@ -1698,9 +1698,7 @@ impl AgentBackend for CodexAgentBackend {
             "required workspace MCP servers",
             thread_mcp_configs
                 .iter()
-                .filter(|(_, server)| {
-                    server.get("required").and_then(Value::as_bool) == Some(true)
-                })
+                .filter(|(_, server)| server.get("required").and_then(Value::as_bool) == Some(true))
                 .map(|(name, _)| name.clone()),
         );
         let mut config = HashMap::new();
